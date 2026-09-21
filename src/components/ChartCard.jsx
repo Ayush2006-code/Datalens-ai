@@ -1,109 +1,114 @@
-import { useState } from 'react'
-import {
-  ResponsiveContainer,
-  LineChart,
-  Line,
-  BarChart,
-  Bar,
-  PieChart,
-  Pie,
-  Cell,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-} from 'recharts'
-import { EyeOff, BarChart3, LineChart as LineChartIcon } from 'lucide-react'
+import React, { useState } from 'react';
 
-const PALETTE = ['#14b8a6', '#38bdf8', '#a78bfa', '#fb923c', '#f472b6', '#facc15', '#4ade80', '#f87171']
-
-function ChartTooltip({ active, payload, label }) {
-  if (!active || !payload?.length) return null
-  return (
-    <div className="rounded-lg border border-border bg-surface-raised px-3 py-2 shadow-panel text-xs">
-      <p className="text-ink-muted mb-1">{label}</p>
-      {payload.map((p) => (
-        <p key={p.dataKey} className="text-ink font-mono">
-          {p.name}: {typeof p.value === 'number' ? p.value.toLocaleString() : p.value}
-        </p>
-      ))}
-    </div>
-  )
-}
-
-export default function ChartCard({ chart, onHide }) {
-  const [typeOverride, setTypeOverride] = useState(null)
-  const effectiveType = typeOverride || chart.type
-  const canToggleType = chart.type !== 'pie'
-
-  if (!chart.data?.length) {
-    return (
-      <div className="rounded-xl2 border border-border bg-surface-raised p-5 flex flex-col items-center justify-center text-center h-64">
-        <p className="text-sm text-ink-muted">Not enough data to build "{chart.title}".</p>
-      </div>
-    )
+export default function ChartCard({ dataset }) {
+  if (!dataset || !dataset.rows || dataset.rows.length === 0) {
+    return null;
   }
 
+  const { headers, rows } = dataset;
+
+  // Identify numeric and categorical columns
+  const numericColumns = headers.filter((header) => {
+    return rows.some((row) => {
+      const val = row[header];
+      return val !== null && val !== undefined && !isNaN(Number(val));
+    });
+  });
+
+  const categoricalColumns = headers.filter((header) => !numericColumns.includes(header));
+
+  const [labelCol, setLabelCol] = useState(categoricalColumns[0] || headers[0]);
+  const [valCol, setValCol] = useState(numericColumns[0] || headers[1] || headers[0]);
+
+  if (numericColumns.length === 0) {
+    return (
+      <div className="p-6 bg-slate-900 border border-slate-800 rounded-xl text-center text-slate-400">
+        No numerical columns available in this dataset to generate charts.
+      </div>
+    );
+  }
+
+  // Aggregate data for top 10 items
+  const chartDataMap = {};
+  rows.forEach((row) => {
+    const label = String(row[labelCol] || 'Unknown');
+    const val = Number(row[valCol]) || 0;
+    chartDataMap[label] = (chartDataMap[label] || 0) + val;
+  });
+
+  const chartItems = Object.entries(chartDataMap)
+    .map(([label, val]) => ({ label, value: val }))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 8);
+
+  const maxValue = Math.max(...chartItems.map((item) => item.value), 1);
+
   return (
-    <div className="rounded-xl2 border border-border bg-surface-raised p-5 dl-enter">
-      <div className="flex items-start justify-between mb-4 gap-2">
-        <h3 className="text-sm font-medium text-ink">{chart.title}</h3>
-        <div className="flex items-center gap-1 shrink-0">
-          {canToggleType && (
-            <button
-              onClick={() => setTypeOverride(effectiveType === 'line' ? 'bar' : 'line')}
-              className="text-ink-faint hover:text-ink p-1"
-              aria-label="Toggle chart type"
-              title="Toggle chart type"
+    <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-6">
+      {/* Chart Controls Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+        <div>
+          <h3 className="text-lg font-semibold text-slate-100">Visual Data Breakdown</h3>
+          <p className="text-xs text-slate-400">Compare metrics across top categories</p>
+        </div>
+
+        <div className="flex flex-wrap gap-3">
+          {/* Label Selector */}
+          <div className="flex items-center gap-2 text-xs text-slate-400">
+            <span>Category (X):</span>
+            <select
+              value={labelCol}
+              onChange={(e) => setLabelCol(e.target.value)}
+              className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 text-xs focus:outline-none focus:border-emerald-500"
             >
-              {effectiveType === 'line' ? <BarChart3 size={14} /> : <LineChartIcon size={14} />}
-            </button>
-          )}
-          {onHide && (
-            <button onClick={() => onHide(chart.id)} className="text-ink-faint hover:text-ink p-1" aria-label="Hide chart" title="Hide chart">
-              <EyeOff size={14} />
-            </button>
-          )}
+              {headers.map((h) => (
+                <option key={h} value={h}>
+                  {h}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Value Selector */}
+          <div className="flex items-center gap-2 text-xs text-slate-400">
+            <span>Metric (Y):</span>
+            <select
+              value={valCol}
+              onChange={(e) => setValCol(e.target.value)}
+              className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 text-xs focus:outline-none focus:border-emerald-500"
+            >
+              {numericColumns.map((h) => (
+                <option key={h} value={h}>
+                  {h}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
-      <div className="h-64">
-        <ResponsiveContainer width="100%" height="100%">
-          {effectiveType === 'pie' ? (
-            <PieChart>
-              <Pie data={chart.data} dataKey="value" nameKey="label" innerRadius={50} outerRadius={85} paddingAngle={2}>
-                {chart.data.map((_, i) => (
-                  <Cell key={i} fill={PALETTE[i % PALETTE.length]} />
-                ))}
-              </Pie>
-              <Tooltip content={<ChartTooltip />} />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
-            </PieChart>
-          ) : effectiveType === 'line' ? (
-            <LineChart data={chart.data} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--border) / var(--border-alpha))" />
-              <XAxis dataKey={chart.xKey} tick={{ fontSize: 11, fill: 'rgb(var(--ink-faint))' }} />
-              <YAxis tick={{ fontSize: 11, fill: 'rgb(var(--ink-faint))' }} />
-              <Tooltip content={<ChartTooltip />} />
-              {chart.series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} />}
-              {chart.series.map((s, i) => (
-                <Line key={s.key} type="monotone" dataKey={s.key} name={s.name} stroke={PALETTE[i % PALETTE.length]} strokeWidth={2} dot={false} />
-              ))}
-            </LineChart>
-          ) : (
-            <BarChart data={chart.data} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--border) / var(--border-alpha))" />
-              <XAxis dataKey={chart.xKey} tick={{ fontSize: 11, fill: 'rgb(var(--ink-faint))' }} interval={0} angle={-20} textAnchor="end" height={50} />
-              <YAxis tick={{ fontSize: 11, fill: 'rgb(var(--ink-faint))' }} />
-              <Tooltip content={<ChartTooltip />} />
-              {chart.series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} />}
-              {chart.series.map((s, i) => (
-                <Bar key={s.key} dataKey={s.key} name={s.name} fill={PALETTE[i % PALETTE.length]} radius={[4, 4, 0, 0]} />
-              ))}
-            </BarChart>
-          )}
-        </ResponsiveContainer>
+
+      {/* Horizontal Bar Chart Representation */}
+      <div className="space-y-3 pt-2">
+        {chartItems.map((item, idx) => {
+          const percentage = Math.min((item.value / maxValue) * 100, 100);
+          return (
+            <div key={idx} className="space-y-1">
+              <div className="flex justify-between text-xs text-slate-300 font-mono">
+                <span className="truncate max-w-[200px]">{item.label}</span>
+                <span className="text-emerald-400 font-semibold">
+                  {item.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                </span>
+              </div>
+              <div className="w-full bg-slate-950 rounded-full h-3 overflow-hidden border border-slate-800/60">
+                <div
+                  className="bg-gradient-to-r from-emerald-500 to-teal-400 h-full rounded-full transition-all duration-500 ease-out"
+                  style={{ width: `${percentage}%` }}
+                ></div>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
-  )
+  );
 }

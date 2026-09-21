@@ -1,119 +1,105 @@
-import { useCallback, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { UploadCloud, FileSpreadsheet, Sparkles, Link2 } from 'lucide-react'
-import { useWorkbook } from '../context/WorkbookContext.jsx'
-import { SUPPORTED_EXTENSIONS, MAX_FILE_SIZE_BYTES } from '../services/spreadsheetParser.js'
-import { isGoogleSheetsConfigured, startGoogleOAuthFlow } from '../services/googleSheets.js'
-import { useToast } from '../context/ToastContext.jsx'
+import React, { useState } from 'react';
+import { uploadAndParseWorkbook } from '../services/workbookService';
 
-export default function UploadView() {
-  const { uploadFile, loadDemoWorkbook } = useWorkbook()
-  const { notify } = useToast()
-  const navigate = useNavigate()
-  const inputRef = useRef(null)
-  const [dragOver, setDragOver] = useState(false)
-  const [selectedName, setSelectedName] = useState('')
+export default function UploadView({ onUploadSuccess }) {
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
 
-  const handleFile = useCallback(
-    async (file) => {
-      if (!file) return
-      setSelectedName(file.name)
-      const wb = await uploadFile(file)
-      if (wb) navigate('/app/dashboard')
-    },
-    [uploadFile, navigate]
-  )
+  const processFile = async (file) => {
+    if (!file) return;
 
-  function onDrop(e) {
-    e.preventDefault()
-    setDragOver(false)
-    const file = e.dataTransfer.files?.[0]
-    handleFile(file)
-  }
-
-  async function handleDemo() {
-    const wb = await loadDemoWorkbook()
-    if (wb) navigate('/app/dashboard')
-  }
-
-  async function handleGoogleConnect() {
-    try {
-      await startGoogleOAuthFlow()
-    } catch (err) {
-      notify(err.message, 'info')
+    // File validation
+    const validTypes = [
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-excel',
+      'text/csv',
+    ];
+    
+    if (!validTypes.includes(file.type) && !file.name.match(/\.(xlsx|xls|csv)$/i)) {
+      setErrorMsg('Please upload a valid Excel (.xlsx, .xls) or CSV file.');
+      return;
     }
-  }
+
+    setLoading(true);
+    setErrorMsg('');
+
+    const result = await uploadAndParseWorkbook(file);
+
+    setLoading(false);
+
+    if (result.success) {
+      if (onUploadSuccess) {
+        onUploadSuccess(result.workbookId);
+      } else {
+        alert('Workbook uploaded and parsed successfully!');
+      }
+    } else {
+      setErrorMsg(result.error || 'Failed to upload and parse workbook.');
+    }
+  };
+
+  const handleFileChange = (e) => {
+    const file = e.target.files[0];
+    processFile(file);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      processFile(e.dataTransfer.files[0]);
+    }
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+  };
 
   return (
-    <div className="max-w-3xl mx-auto p-6 md:p-10">
-      <h1 className="font-display text-2xl font-semibold text-ink mb-2">Upload a workbook</h1>
-      <p className="text-sm text-ink-muted mb-8">Supports .xlsx, .xls, .csv, and .ods files up to {MAX_FILE_SIZE_BYTES / 1024 / 1024}MB.</p>
-
+    <div className="flex flex-col items-center justify-center p-8 min-h-[400px]">
       <div
-        onDragOver={(e) => {
-          e.preventDefault()
-          setDragOver(true)
-        }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={onDrop}
-        className={`rounded-xl2 border-2 border-dashed p-10 text-center transition-colors ${
-          dragOver ? 'border-accent bg-accent-soft' : 'border-border bg-surface-raised'
-        }`}
+        onDrop={handleDrop}
+        onDragOver={handleDragOver}
+        className="w-full max-w-xl p-8 border-2 border-dashed border-slate-700 rounded-xl bg-slate-900/50 text-center flex flex-col items-center justify-center cursor-pointer hover:border-emerald-500 transition-colors"
       >
-        <div className="h-12 w-12 rounded-xl bg-accent-soft text-accent flex items-center justify-center mx-auto mb-4">
-          <UploadCloud size={22} />
-        </div>
-        <p className="text-ink font-medium mb-1">Drag and drop your file here</p>
-        <p className="text-sm text-ink-muted mb-5">or</p>
-        <button
-          onClick={() => inputRef.current?.click()}
-          className="bg-accent hover:bg-accent-strong transition-colors text-white text-sm font-medium rounded-lg px-5 py-2.5"
-        >
-          Browse files
-        </button>
         <input
-          ref={inputRef}
           type="file"
-          accept={SUPPORTED_EXTENSIONS.map((e) => `.${e}`).join(',')}
+          id="fileInput"
+          accept=".xlsx, .xls, .csv"
+          onChange={handleFileChange}
           className="hidden"
-          onChange={(e) => handleFile(e.target.files?.[0])}
+          disabled={loading}
         />
-        {selectedName && (
-          <p className="mt-4 text-xs text-ink-faint flex items-center justify-center gap-1.5">
-            <FileSpreadsheet size={13} /> {selectedName}
-          </p>
-        )}
+
+        <label htmlFor="fileInput" className="cursor-pointer flex flex-col items-center w-full">
+          {loading ? (
+            <div className="flex flex-col items-center gap-3">
+              <div className="w-10 h-10 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+              <p className="text-slate-300 font-medium">Uploading and parsing spreadsheet...</p>
+            </div>
+          ) : (
+            <>
+              <div className="w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center mb-4 text-emerald-400 text-2xl">
+                📊
+              </div>
+              <h3 className="text-lg font-semibold text-slate-100 mb-1">
+                Upload your workbook
+              </h3>
+              <p className="text-sm text-slate-400 mb-4">
+                Drag and drop your Excel (.xlsx, .xls) or CSV file here, or click to browse
+              </p>
+              <span className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-semibold rounded-lg text-sm transition-colors">
+                Browse File
+              </span>
+            </>
+          )}
+        </label>
       </div>
 
-      <div className="grid sm:grid-cols-2 gap-4 mt-6">
-        <button
-          onClick={handleDemo}
-          className="flex items-center gap-3 rounded-xl border border-border bg-surface-raised p-4 text-left hover:border-accent/40 transition-colors"
-        >
-          <div className="h-9 w-9 rounded-lg bg-accent-soft text-accent flex items-center justify-center shrink-0">
-            <Sparkles size={16} />
-          </div>
-          <div>
-            <p className="text-sm font-medium text-ink">Try demo data</p>
-            <p className="text-xs text-ink-muted">A realistic sales workbook with 3 sheets</p>
-          </div>
-        </button>
-
-        <button
-          onClick={handleGoogleConnect}
-          className="flex items-center gap-3 rounded-xl border border-border bg-surface-raised p-4 text-left hover:border-accent/40 transition-colors"
-        >
-          <div className="h-9 w-9 rounded-lg bg-surface-sunken text-ink-muted flex items-center justify-center shrink-0">
-            <Link2 size={16} />
-          </div>
-          <div>
-            <p className="text-sm font-medium text-ink">Connect Google Sheets</p>
-            <p className="text-xs text-ink-muted">
-              {isGoogleSheetsConfigured() ? 'Sign in with Google to import a sheet' : 'Requires OAuth configuration'}
-            </p>
-          </div>
-        </button>
-      </div>
+      {errorMsg && (
+        <div className="mt-4 p-3 bg-red-500/10 border border-red-500/20 text-red-400 text-sm rounded-lg max-w-xl w-full text-center">
+          {errorMsg}
+        </div>
+      )}
     </div>
-  )
+  );
 }
