@@ -1,0 +1,98 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Color variables are raw "R G B" triplets (no rgb() wrapper) so Tailwind's
+   rgb(var(--x) / <alpha-value>) pattern in tailwind.config.js can apply
+   opacity modifiers like bg-surface-sunken/60 correctly. */
+:root {
+  color-scheme: dark;
+  --surface: 11 18 32;
+  --surface-raised: 17 26 46;
+  --surface-sunken: 7 13 24;
+  --border: 148 163 184;
+  --border-alpha: 0.14;
+  --ink: 231 237 247;
+  --ink-muted: 148 163 184;
+  --ink-faint: 91 107 132;
+}
+
+:root.light {
+  color-scheme: light;
+  --surface: 246 248 251;
+  --surface-raised: 255 255 255;
+  --surface-sunken: 238 241 246;
+  --border: 15 23 42;
+  --border-alpha: 0.08;
+  --ink: 16 23 40;
+  --ink-muted: 86 99 122;
+  --ink-faint: 137 150 171;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: rgb(var(--surface));
+  color: rgb(var(--ink));
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: rgba(20, 184, 166, 0.35);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--border) / var(--border-alpha));
+  border-radius: 999px;
+}
+
+:focus-visible {
+  outline: 2px solid #14b8a6;
+  outline-offset: 2px;
+}
+
+@keyframes dl-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.dl-enter {
+  animation: dl-fade-up 0.35s ease both;
+}
+
+@keyframes dl-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+.dl-skeleton {
+  background: rgb(var(--surface-sunken));
+  border-radius: 0.6rem;
+  animation: dl-pulse 1.4s ease-in-out infinite;
+}
