@@ -9,6 +9,9 @@ import {
 
 import * as authService from '../services/auth.js'
 import { supabase } from '../services/supabaseClient.js'
+import {
+  unlockUserEncryption,
+} from '../services/encryptionService.js'
 
 const AuthContext = createContext(null)
 
@@ -16,18 +19,39 @@ export function AuthProvider({ children }) {
   const [session, setSession] = useState(null)
   const [authLoading, setAuthLoading] = useState(true)
 
+  // Encryption key stays only in browser memory.
+  const [encryptionKey, setEncryptionKey] = useState(null)
+  const [encryptionReady, setEncryptionReady] = useState(false)
+
   useEffect(() => {
     let mounted = true
 
     const loadSession = async () => {
       try {
-        const currentSession = await authService.getSession()
+        const currentSession =
+          await authService.getSession()
 
-        if (mounted) {
-          setSession(currentSession)
+        if (!mounted) return
+
+        if (currentSession?.user) {
+          const user = currentSession.user
+
+          setSession({
+            userId: user.id,
+            name:
+              user.user_metadata?.name ||
+              user.user_metadata?.full_name ||
+              '',
+            email: user.email || '',
+          })
+        } else {
+          setSession(null)
         }
       } catch (error) {
-        console.error('Failed to load auth session:', error)
+        console.error(
+          'Failed to load auth session:',
+          error,
+        )
 
         if (mounted) {
           setSession(null)
@@ -47,18 +71,24 @@ export function AuthProvider({ children }) {
       (_event, supabaseSession) => {
         if (!mounted) return
 
-        const user = supabaseSession?.user ?? null
+        const user =
+          supabaseSession?.user ?? null
 
-        setSession(
-          user
-            ? {
-                userId: user.id,
-                name: user.user_metadata?.name || '',
-                email: user.email || '',
-              }
-            : null
-        )
-      }
+        if (user) {
+          setSession({
+            userId: user.id,
+            name:
+              user.user_metadata?.name ||
+              user.user_metadata?.full_name ||
+              '',
+            email: user.email || '',
+          })
+        } else {
+          setSession(null)
+          setEncryptionKey(null)
+          setEncryptionReady(false)
+        }
+      },
     )
 
     return () => {
@@ -67,73 +97,256 @@ export function AuthProvider({ children }) {
     }
   }, [])
 
-  const login = useCallback(async (email, password) => {
-    setAuthLoading(true)
+  /* =====================================================
+     LOGIN
+  ===================================================== */
 
-    try {
-      const s = await authService.signIn({
-        email,
-        password,
-      })
+  const login = useCallback(
+    async (email, password) => {
+      setAuthLoading(true)
+      setEncryptionReady(false)
 
-      setSession(s)
-      return s
-    } finally {
-      setAuthLoading(false)
-    }
-  }, [])
+      try {
+        /*
+         * 1. Authenticate with Supabase.
+         */
+        const result =
+          await authService.login({
+            email,
+            password,
+          })
 
-  const register = useCallback(async (payload) => {
-    setAuthLoading(true)
+        const user = result?.user
 
-    try {
-      const s = await authService.signUp(payload)
+        if (!user) {
+          throw new Error(
+            'Login succeeded but user information was not returned.',
+          )
+        }
 
-      if (s) {
-        setSession(s)
+        /*
+         * 2. Unlock the user's encryption key.
+         *
+         * Password is used only in this function.
+         * It is NOT stored in localStorage,
+         * sessionStorage, React state, or Supabase.
+         */
+        const dek =
+          await unlockUserEncryption(
+            user.id,
+            password,
+          )
+
+        /*
+         * 3. Keep DEK only in browser memory.
+         */
+        setEncryptionKey(dek)
+        setEncryptionReady(true)
+
+        const nextSession = {
+          userId: user.id,
+          name:
+            user.user_metadata?.name ||
+            user.user_metadata?.full_name ||
+            '',
+          email: user.email || '',
+        }
+
+        setSession(nextSession)
+
+        return nextSession
+      } catch (error) {
+        /*
+         * If encryption unlock fails, do not leave
+         * a partially authenticated encryption state.
+         */
+        setEncryptionKey(null)
+        setEncryptionReady(false)
+
+        throw error
+      } finally {
+        setAuthLoading(false)
       }
+    },
+    [],
+  )
 
-      return s
-    } finally {
-      setAuthLoading(false)
-    }
-  }, [])
+  /* =====================================================
+     REGISTER
+  ===================================================== */
 
-  const logout = useCallback(async () => {
-    setAuthLoading(true)
+  const register = useCallback(
+    async (payload) => {
+      setAuthLoading(true)
 
-    try {
-      await authService.signOut()
-      setSession(null)
-    } finally {
-      setAuthLoading(false)
-    }
-  }, [])
+      try {
+        /*
+         * payload normally contains:
+         * email
+         * password
+         * fullName
+         */
+        const result =
+          await authService.signup(payload)
+
+        /*
+         * If Supabase immediately creates a session,
+         * unlock the DEK now.
+         */
+        if (
+          result?.session?.user &&
+          payload?.password
+        ) {
+          const user =
+            result.session.user
+
+          const dek =
+            await unlockUserEncryption(
+              user.id,
+              payload.password,
+            )
+
+          setEncryptionKey(dek)
+          setEncryptionReady(true)
+
+          const nextSession = {
+            userId: user.id,
+            name:
+              user.user_metadata?.name ||
+              user.user_metadata?.full_name ||
+              '',
+            email:
+              user.email || '',
+          }
+
+          setSession(nextSession)
+
+          return {
+            ...result,
+            session: nextSession,
+          }
+        }
+
+        /*
+         * If email confirmation is enabled,
+         * there may not be a session yet.
+         */
+        if (result?.user) {
+          setSession({
+            userId: result.user.id,
+            name:
+              result.user.user_metadata?.name ||
+              result.user.user_metadata?.full_name ||
+              '',
+            email:
+              result.user.email || '',
+          })
+        }
+
+        return result
+      } finally {
+        setAuthLoading(false)
+      }
+    },
+    [],
+  )
+
+  /* =====================================================
+     LOGOUT
+  ===================================================== */
+
+  const logout = useCallback(
+    async () => {
+      setAuthLoading(true)
+
+      try {
+        await authService.logout()
+
+        /*
+         * Destroy the in-memory encryption key.
+         */
+        setEncryptionKey(null)
+        setEncryptionReady(false)
+        setSession(null)
+      } finally {
+        setAuthLoading(false)
+      }
+    },
+    [],
+  )
+
+  /* =====================================================
+     UPDATE PROFILE
+  ===================================================== */
 
   const updateProfile = useCallback(
     async (updates) => {
       if (!session) return null
 
-      const s = await authService.updateProfile(
-        session.userId,
-        updates
-      )
+      /*
+       * Keep compatibility with existing UI.
+       *
+       * Supabase profile update.
+       */
+      const {
+        data,
+        error,
+      } = await supabase.auth.updateUser({
+        data: updates,
+      })
 
-      setSession(s)
-      return s
+      if (error) {
+        console.error(
+          'Update profile error:',
+          error,
+        )
+
+        throw error
+      }
+
+      const user = data.user
+
+      const nextSession = {
+        userId: user.id,
+        name:
+          user.user_metadata?.name ||
+          user.user_metadata?.full_name ||
+          '',
+        email:
+          user.email || '',
+      }
+
+      setSession(nextSession)
+
+      return nextSession
     },
-    [session]
+    [session],
   )
+
+  /* =====================================================
+     CONTEXT VALUE
+  ===================================================== */
 
   const value = useMemo(
     () => ({
       session,
       user: session,
+
       authLoading,
+
       login,
       register,
       logout,
       updateProfile,
+
+      /*
+       * Encryption state.
+       *
+       * Components that need to encrypt/decrypt
+       * data can use encryptionKey.
+       */
+      encryptionKey,
+      encryptionReady,
     }),
     [
       session,
@@ -142,7 +355,9 @@ export function AuthProvider({ children }) {
       register,
       logout,
       updateProfile,
-    ]
+      encryptionKey,
+      encryptionReady,
+    ],
   )
 
   return (
@@ -157,7 +372,7 @@ export function useAuth() {
 
   if (!ctx) {
     throw new Error(
-      'useAuth must be used within AuthProvider'
+      'useAuth must be used within AuthProvider',
     )
   }
 

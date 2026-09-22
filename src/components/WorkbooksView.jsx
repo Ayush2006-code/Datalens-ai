@@ -1,82 +1,199 @@
 import React, { useEffect, useState } from 'react';
-import { getUserWorkbooks } from '../services/workbookService';
+import {
+  getUserWorkbooks,
+  deleteWorkbook,
+} from '../services/workbookService';
 
 export default function WorkbooksView({ onSelectWorkbook, onUploadNew }) {
   const [workbooks, setWorkbooks] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [deletingId, setDeletingId] = useState(null);
+
+  const loadWorkbooks = async () => {
+    setLoading(true);
+
+    try {
+      const data = await getUserWorkbooks();
+      setWorkbooks(data || []);
+    } catch (error) {
+      console.error('Failed to load workbooks:', error);
+      setWorkbooks([]);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
     loadWorkbooks();
   }, []);
 
-  const loadWorkbooks = async () => {
-    setLoading(true);
-    const data = await getUserWorkbooks();
-    setWorkbooks(data);
-    setLoading(false);
+  const handleDelete = async (event, workbookId, workbookName) => {
+    event.stopPropagation();
+
+    const confirmed = window.confirm(
+      `Are you sure you want to delete "${workbookName}"?\n\nThis will permanently remove the workbook and its saved data.`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setDeletingId(workbookId);
+
+      const result = await deleteWorkbook(workbookId);
+
+      if (!result?.success) {
+        throw new Error(result?.error || 'Delete failed');
+      }
+
+      setWorkbooks((current) =>
+        current.filter((workbook) => workbook.id !== workbookId)
+      );
+
+      alert('Workbook deleted successfully.');
+    } catch (error) {
+      console.error('Delete workbook error:', error);
+      alert(error.message || 'Failed to delete workbook.');
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   const formatFileSize = (bytes) => {
-    if (!bytes) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    if (!bytes) return '0 KB';
+
+    if (bytes < 1024) {
+      return `${bytes} B`;
+    }
+
+    if (bytes < 1024 * 1024) {
+      return `${(bytes / 1024).toFixed(1)} KB`;
+    }
+
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const formatDate = (date) => {
+    if (!date) return 'Unknown date';
+
+    try {
+      return new Date(date).toLocaleString();
+    } catch {
+      return 'Unknown date';
+    }
   };
 
   return (
     <div className="p-6">
-      <div className="flex justify-between items-center mb-6">
+      {/* Header */}
+      <div className="mb-6 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-100">Your Workbooks</h1>
-          <p className="text-sm text-slate-400">Manage and explore your uploaded datasets</p>
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-white">
+            Your Workbooks
+          </h2>
+
+          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+            Manage your uploaded Excel and spreadsheet files
+          </p>
         </div>
+
         <button
           onClick={onUploadNew}
-          className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-semibold rounded-lg text-sm transition-colors"
+          className="rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700"
         >
           + Upload New
         </button>
       </div>
 
-      {loading ? (
-        <div className="flex justify-center items-center py-20">
-          <div className="w-8 h-8 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+      {/* Loading */}
+      {loading && (
+        <div className="flex items-center justify-center py-16">
+          <div className="text-sm text-gray-500 dark:text-gray-400">
+            Loading workbooks...
+          </div>
         </div>
-      ) : workbooks.length === 0 ? (
-        <div className="text-center py-16 border-2 border-dashed border-slate-800 rounded-xl bg-slate-900/30">
-          <p className="text-slate-400 mb-4">No workbooks uploaded yet.</p>
+      )}
+
+      {/* Empty */}
+      {!loading && workbooks.length === 0 && (
+        <div className="rounded-xl border border-dashed border-gray-300 bg-white p-10 text-center dark:border-gray-700 dark:bg-gray-900">
+          <div className="mb-3 text-5xl">📊</div>
+
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+            No workbooks yet
+          </h3>
+
+          <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
+            Upload your first workbook to start analyzing your data.
+          </p>
+
           <button
             onClick={onUploadNew}
-            className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-semibold rounded-lg text-sm"
+            className="mt-5 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
           >
-            Upload your first file
+            Upload Workbook
           </button>
         </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {workbooks.map((wb) => (
-            <div
-              key={wb.id}
-              onClick={() => onSelectWorkbook && onSelectWorkbook(wb.id)}
-              className="p-5 bg-slate-900 border border-slate-800 hover:border-emerald-500/50 rounded-xl cursor-pointer transition-all hover:shadow-lg hover:shadow-emerald-500/5 group"
-            >
-              <div className="flex items-start justify-between mb-3">
-                <div className="w-10 h-10 bg-emerald-500/10 text-emerald-400 rounded-lg flex items-center justify-center font-bold">
+      )}
+
+      {/* Workbook Grid */}
+      {!loading && workbooks.length > 0 && (
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3">
+          {workbooks.map((wb) => {
+            const isDeleting = deletingId === wb.id;
+
+            return (
+              <div
+                key={wb.id}
+                onClick={() =>
+                  !isDeleting &&
+                  onSelectWorkbook &&
+                  onSelectWorkbook(wb.id)
+                }
+                className={`group relative cursor-pointer rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-blue-400 hover:shadow-md dark:border-gray-700 dark:bg-gray-900 ${
+                  isDeleting ? 'pointer-events-none opacity-60' : ''
+                }`}
+              >
+                {/* Delete Button */}
+                <button
+                  type="button"
+                  onClick={(event) =>
+                    handleDelete(event, wb.id, wb.name)
+                  }
+                  disabled={isDeleting}
+                  title="Delete workbook"
+                  className="absolute right-3 top-3 z-10 flex h-9 w-9 items-center justify-center rounded-lg text-red-500 transition hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-red-950"
+                >
+                  {isDeleting ? '⏳' : '🗑️'}
+                </button>
+
+                {/* File Icon */}
+                <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-blue-50 text-2xl dark:bg-blue-950">
                   📊
                 </div>
-                <span className="text-xs text-slate-500 font-mono">
-                  {formatFileSize(wb.file_size)}
-                </span>
+
+                {/* Workbook Name */}
+                <h3 className="truncate pr-10 text-base font-semibold text-gray-900 dark:text-white">
+                  {wb.name}
+                </h3>
+
+                {/* File Info */}
+                <div className="mt-3 space-y-1">
+                  <p className="text-sm text-gray-500 dark:text-gray-400">
+                    Size: {formatFileSize(wb.file_size)}
+                  </p>
+
+                  <p className="text-xs text-gray-400 dark:text-gray-500">
+                    Uploaded: {formatDate(wb.created_at)}
+                  </p>
+                </div>
+
+                {/* Open label */}
+                <div className="mt-4 text-sm font-medium text-blue-600 dark:text-blue-400">
+                  Open workbook →
+                </div>
               </div>
-              <h3 className="font-semibold text-slate-200 group-hover:text-emerald-400 transition-colors truncate">
-                {wb.name}
-              </h3>
-              <p className="text-xs text-slate-500 mt-2">
-                Uploaded: {new Date(wb.created_at).toLocaleDateString()}
-              </p>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

@@ -1,11 +1,30 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react'
+
 import { useAuth } from './AuthContext.jsx'
 import { useToast } from './ToastContext.jsx'
-import * as storage from '../services/storage.js'
-import { parseSpreadsheetFile, SpreadsheetError } from '../services/spreadsheetParser.js'
+
+import {
+  getUserWorkbooks,
+  getWorkbookDatasets,
+  uploadAndParseWorkbook,
+} from '../services/workbookService.js'
+
+import { decryptJSON } from '../services/crypto.js'
+
+import {
+  parseSpreadsheetFile,
+  SpreadsheetError,
+} from '../services/spreadsheetParser.js'
+
 import { profileSheet } from '../services/dataProfiler.js'
 import { buildDemoWorkbook } from '../services/demoData.js'
-import { diffWorkbooks, summarizeDiff } from '../services/workbookDiff.js'
 import { emptyFilters } from '../services/filterEngine.js'
 
 const WorkbookContext = createContext(null)
@@ -21,286 +40,1177 @@ const PROCESSING_STEPS = [
   'Finding insights',
 ]
 
-function buildSheetsFromParsed(parsed) {
+function buildSheetsFromDatasets(datasets) {
   const sheets = {}
-  for (const [name, sheet] of Object.entries(parsed.sheets)) {
-    sheets[name] = { columns: sheet.columns, rows: sheet.rows }
+
+  for (const dataset of datasets || []) {
+    const headers = Array.isArray(dataset.headers)
+      ? dataset.headers
+      : []
+
+    const rows = Array.isArray(dataset.rows)
+      ? dataset.rows
+      : []
+
+    if (!dataset.sheet_name) {
+      continue
+    }
+
+    sheets[dataset.sheet_name] = {
+      columns: headers,
+      rows,
+    }
   }
+
   return sheets
 }
 
-export function WorkbookProvider({ children }) {
-  const { session } = useAuth()
-  const { notify } = useToast()
+function buildWorkbookFromSupabase(
+  workbook,
+  datasets,
+) {
+  const sheets =
+    buildSheetsFromDatasets(
+      datasets,
+    )
 
-  const [workbooks, setWorkbooks] = useState([])
-  const [activeWorkbookId, setActiveWorkbookId] = useState(null)
-  const [activeSheetName, setActiveSheetName] = useState(null)
-  const [filtersBySheet, setFiltersBySheet] = useState({})
-  const [processing, setProcessing] = useState({ active: false, steps: [], label: '' })
+  return {
+    id: workbook.id,
+    ownerId: workbook.user_id,
+    name: workbook.name,
+    filePath: workbook.file_path,
+    fileSize: workbook.file_size,
+    createdAt: workbook.created_at,
+    updatedAt: workbook.created_at,
+    sourceType: 'upload',
+    sheets,
+    sheetOrder: Object.keys(sheets),
+    datasets,
+    dashboardConfig: {},
+    versions: [
+      {
+        version: 1,
+        savedAt: workbook.created_at,
+        note: 'Uploaded workbook',
+      },
+    ],
+  }
+}
 
-  const ownerId = session?.userId || null
+function buildWorkbookFromParsed(
+  parsed,
+  id = null,
+) {
+  const sheets =
+    buildSheetsFromParsed(parsed)
 
-  const refreshWorkbooks = useCallback(() => {
-    if (!ownerId) {
-      setWorkbooks([])
-      return
+  return {
+    id:
+      id ||
+      `local_${Date.now()}`,
+
+    ownerId: 'local',
+
+    name:
+      parsed.fileName.replace(
+        /\.(xlsx|xls|csv|ods)$/i,
+        '',
+      ),
+
+    createdAt:
+      new Date().toISOString(),
+
+    updatedAt:
+      new Date().toISOString(),
+
+    sourceType: 'demo',
+
+    sheets,
+
+    sheetOrder:
+      Object.keys(sheets),
+
+    dashboardConfig: {},
+
+    versions: [
+      {
+        version: 1,
+        savedAt:
+          new Date().toISOString(),
+        note: 'Demo workbook',
+      },
+    ],
+  }
+}
+
+function buildSheetsFromParsed(parsed) {
+  const sheets = {}
+
+  for (
+    const [name, sheet] of Object.entries(
+      parsed.sheets || {},
+    )
+  ) {
+    sheets[name] = {
+      columns: sheet.columns,
+      rows: sheet.rows,
     }
-    setWorkbooks(storage.listWorkbooks(ownerId))
-  }, [ownerId])
+  }
+
+  return sheets
+}
+
+/* =========================================================
+   DECRYPT DATASETS
+========================================================= */
+
+async function decryptSupabaseDatasets(
+  datasets,
+  encryptionKey,
+) {
+  if (!encryptionKey) {
+    throw new Error(
+      'Encryption key is not available. Please login again.',
+    )
+  }
+
+  const decryptedDatasets =
+    await Promise.all(
+      (datasets || []).map(
+        async (dataset) => {
+          /*
+           * New encrypted dataset.
+           */
+          if (
+            dataset.encrypted_payload
+          ) {
+            const payload =
+              await decryptJSON(
+                dataset.encrypted_payload,
+                encryptionKey,
+              )
+
+            return {
+              ...dataset,
+
+              sheet_name:
+                payload.sheet_name,
+
+              headers:
+                payload.headers,
+
+              rows:
+                payload.rows,
+
+              row_count:
+                payload.row_count,
+            }
+          }
+
+          /*
+           * Old plaintext dataset.
+           *
+           * This fallback is intentionally kept so
+           * existing test records don't crash the app.
+           *
+           * IMPORTANT:
+           * Old records are NOT encrypted.
+           */
+          return dataset
+        },
+      ),
+    )
+
+  return decryptedDatasets
+}
+
+/* =========================================================
+   PROVIDER
+========================================================= */
+
+export function WorkbookProvider({
+  children,
+}) {
+  const {
+    session,
+    encryptionKey,
+    encryptionReady,
+  } = useAuth()
+
+  const { notify } =
+    useToast()
+
+  const [
+    workbooks,
+    setWorkbooks,
+  ] = useState([])
+
+  const [
+    activeWorkbookId,
+    setActiveWorkbookId,
+  ] = useState(null)
+
+  const [
+    activeSheetName,
+    setActiveSheetName,
+  ] = useState(null)
+
+  const [
+    filtersBySheet,
+    setFiltersBySheet,
+  ] = useState({})
+
+  const [
+    processing,
+    setProcessing,
+  ] = useState({
+    active: false,
+    steps: [],
+    label: '',
+  })
+
+  const ownerId =
+    session?.userId || null
+
+  /* =====================================================
+     REFRESH WORKBOOKS
+  ===================================================== */
+
+  const refreshWorkbooks =
+    useCallback(
+      async () => {
+        if (!ownerId) {
+          setWorkbooks([])
+          return []
+        }
+
+        try {
+          const data =
+            await getUserWorkbooks()
+
+          const normalized =
+            (data || []).map(
+              (wb) => ({
+                ...wb,
+
+                ownerId:
+                  wb.user_id,
+
+                createdAt:
+                  wb.created_at,
+
+                updatedAt:
+                  wb.created_at,
+
+                sourceType:
+                  'upload',
+              }),
+            )
+
+          setWorkbooks(
+            normalized,
+          )
+
+          return normalized
+        } catch (error) {
+          console.error(
+            'Failed to refresh workbooks:',
+            error,
+          )
+
+          notify(
+            error?.message ||
+              'Could not load your workbooks.',
+            'error',
+          )
+
+          setWorkbooks([])
+
+          return []
+        }
+      },
+      [
+        ownerId,
+        notify,
+      ],
+    )
+
+  /* =====================================================
+     RESET WHEN USER CHANGES
+  ===================================================== */
 
   useEffect(() => {
     refreshWorkbooks()
+
     setActiveWorkbookId(null)
     setActiveSheetName(null)
     setFiltersBySheet({})
-  }, [ownerId, refreshWorkbooks])
+  }, [
+    ownerId,
+    refreshWorkbooks,
+  ])
 
-  const runProcessingAnimation = useCallback(async (label) => {
-    setProcessing({ active: true, label, steps: PROCESSING_STEPS.map((s) => ({ label: s, done: false })) })
-    for (let i = 0; i < PROCESSING_STEPS.length; i++) {
-      // eslint-disable-next-line no-await-in-loop
-      await new Promise((r) => setTimeout(r, 140))
-      setProcessing((p) => ({
-        ...p,
-        steps: p.steps.map((s, idx) => (idx <= i ? { ...s, done: true } : s)),
-      }))
-    }
-    await new Promise((r) => setTimeout(r, 220))
-    setProcessing({ active: false, steps: [], label: '' })
-  }, [])
+  /* =====================================================
+     PROCESSING ANIMATION
+  ===================================================== */
 
-  const openWorkbookInternal = useCallback((wb) => {
-    setActiveWorkbookId(wb.id)
-    setActiveSheetName(wb.sheetOrder?.[0] || Object.keys(wb.sheets)[0])
-    setFiltersBySheet({})
-  }, [])
+  const runProcessingAnimation =
+    useCallback(
+      async (label) => {
+        setProcessing({
+          active: true,
 
-  const createAndOpenWorkbook = useCallback(
-    async (parsed, sourceType) => {
-      if (!ownerId) return
-      await runProcessingAnimation(`Analyzing ${parsed.fileName}`)
-      const sheets = buildSheetsFromParsed(parsed)
-      const record = storage.createWorkbookRecord({
-        ownerId,
-        name: parsed.fileName.replace(/\.(xlsx|xls|csv|ods)$/i, ''),
-        sheets,
-        sourceType,
-      })
-      const result = storage.saveWorkbook(record)
-      if (!result.ok) {
-        notify(result.error || 'Could not save this workbook.', 'error')
-        return
-      }
-      refreshWorkbooks()
-      openWorkbookInternal(record)
-      notify('Dashboard ready.', 'success')
-      if (parsed.warnings?.length) {
-        parsed.warnings.forEach((w) => notify(w, 'warning'))
-      }
-      return record
-    },
-    [ownerId, runProcessingAnimation, refreshWorkbooks, openWorkbookInternal, notify]
-  )
+          label,
 
-  const uploadFile = useCallback(
-    async (file) => {
-      try {
-        const parsed = await parseSpreadsheetFile(file)
-        return await createAndOpenWorkbook(parsed, 'upload')
-      } catch (err) {
-        const message =
-          err instanceof SpreadsheetError
-            ? err.message
-            : "We couldn't analyze this workbook. Please check the file and try again."
-        notify(message, 'error')
-        return null
-      }
-    },
-    [createAndOpenWorkbook, notify]
-  )
+          steps:
+            PROCESSING_STEPS.map(
+              (step) => ({
+                label: step,
+                done: false,
+              }),
+            ),
+        })
 
-  const loadDemoWorkbook = useCallback(async () => {
-    const parsed = buildDemoWorkbook()
-    return createAndOpenWorkbook(parsed, 'demo')
-  }, [createAndOpenWorkbook])
+        for (
+          let i = 0;
+          i <
+          PROCESSING_STEPS.length;
+          i++
+        ) {
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise(
+            (resolve) =>
+              setTimeout(
+                resolve,
+                140,
+              ),
+          )
 
-  const openWorkbook = useCallback(
-    (id) => {
-      const wb = storage.getWorkbook(id)
-      if (!wb) {
-        notify('This workbook could not be found.', 'error')
-        return
-      }
-      openWorkbookInternal(wb)
-    },
-    [openWorkbookInternal, notify]
-  )
+          setProcessing(
+            (current) => ({
+              ...current,
 
-  const closeWorkbook = useCallback(() => {
-    setActiveWorkbookId(null)
-    setActiveSheetName(null)
-    setFiltersBySheet({})
-  }, [])
-
-  const deleteWorkbookById = useCallback(
-    (id) => {
-      storage.deleteWorkbook(id)
-      if (activeWorkbookId === id) closeWorkbook()
-      refreshWorkbooks()
-      notify('Workbook deleted.', 'success')
-    },
-    [activeWorkbookId, closeWorkbook, refreshWorkbooks, notify]
-  )
-
-  const toggleFavorite = useCallback(
-    (id) => {
-      const wb = storage.getWorkbook(id)
-      if (!wb) return
-      wb.favorite = !wb.favorite
-      wb.updatedAt = new Date().toISOString()
-      storage.saveWorkbook(wb)
-      refreshWorkbooks()
-    },
-    [refreshWorkbooks]
-  )
-
-  const renameWorkbookById = useCallback(
-    (id, name) => {
-      const wb = storage.getWorkbook(id)
-      if (!wb || !name?.trim()) return
-      wb.name = name.trim()
-      wb.updatedAt = new Date().toISOString()
-      storage.saveWorkbook(wb)
-      refreshWorkbooks()
-    },
-    [refreshWorkbooks]
-  )
-
-  const updateWorkbookWithFile = useCallback(
-    async (id, file) => {
-      const existing = storage.getWorkbook(id)
-      if (!existing) return null
-      try {
-        const parsed = await parseSpreadsheetFile(file)
-        await runProcessingAnimation(`Updating ${existing.name}`)
-        const newSheets = buildSheetsFromParsed(parsed)
-        const diff = diffWorkbooks(existing.sheets, newSheets)
-        const summaryLines = summarizeDiff(diff)
-
-        const mergedSheetOrder = [
-          ...existing.sheetOrder.filter((s) => newSheets[s]),
-          ...Object.keys(newSheets).filter((s) => !existing.sheetOrder.includes(s)),
-        ]
-
-        const updated = {
-          ...existing,
-          sheets: newSheets,
-          sheetOrder: mergedSheetOrder,
-          updatedAt: new Date().toISOString(),
-          versions: [
-            ...existing.versions,
-            { version: existing.versions.length + 1, savedAt: new Date().toISOString(), note: summaryLines.join('; ') },
-          ],
+              steps:
+                current.steps.map(
+                  (
+                    step,
+                    index,
+                  ) =>
+                    index <= i
+                      ? {
+                          ...step,
+                          done: true,
+                        }
+                      : step,
+                ),
+            }),
+          )
         }
-        storage.saveWorkbook(updated)
-        refreshWorkbooks()
-        openWorkbookInternal(updated)
-        notify('Workbook updated successfully.', 'success')
-        return { updated, summaryLines }
-      } catch (err) {
-        const message = err instanceof SpreadsheetError ? err.message : "We couldn't process the new file."
-        notify(message, 'error')
+
+        await new Promise(
+          (resolve) =>
+            setTimeout(
+              resolve,
+              220,
+            ),
+        )
+
+        setProcessing({
+          active: false,
+          steps: [],
+          label: '',
+        })
+      },
+      [],
+    )
+
+  /* =====================================================
+     OPEN WORKBOOK INTERNALLY
+  ===================================================== */
+
+  const openWorkbookInternal =
+    useCallback(
+      (workbook) => {
+        setActiveWorkbookId(
+          workbook.id,
+        )
+
+        setActiveSheetName(
+          workbook.sheetOrder?.[0] ||
+            Object.keys(
+              workbook.sheets || {},
+            )[0] ||
+            null,
+        )
+
+        setFiltersBySheet({})
+      },
+      [],
+    )
+
+  /* =====================================================
+     OPEN SUPABASE WORKBOOK
+  ===================================================== */
+
+  const openSupabaseWorkbook =
+    useCallback(
+      async (workbookId) => {
+        try {
+          if (!encryptionReady) {
+            notify(
+              'Your encrypted data is locked. Please login again to unlock it.',
+              'error',
+            )
+
+            return null
+          }
+
+          if (!encryptionKey) {
+            notify(
+              'Encryption key is unavailable. Please login again.',
+              'error',
+            )
+
+            return null
+          }
+
+          const workbook =
+            (
+              await getUserWorkbooks()
+            ).find(
+              (item) =>
+                item.id ===
+                workbookId,
+            )
+
+          if (!workbook) {
+            notify(
+              'This workbook could not be found.',
+              'error',
+            )
+
+            return null
+          }
+
+          const encryptedDatasets =
+            await getWorkbookDatasets(
+              workbookId,
+            )
+
+          /*
+           * Decrypt datasets ONLY in browser.
+           */
+          const datasets =
+            await decryptSupabaseDatasets(
+              encryptedDatasets,
+              encryptionKey,
+            )
+
+          const normalizedWorkbook =
+            buildWorkbookFromSupabase(
+              workbook,
+              datasets,
+            )
+
+          setWorkbooks(
+            (current) => {
+              const exists =
+                current.some(
+                  (item) =>
+                    item.id ===
+                    normalizedWorkbook.id,
+                )
+
+              if (exists) {
+                return current.map(
+                  (item) =>
+                    item.id ===
+                    normalizedWorkbook.id
+                      ? normalizedWorkbook
+                      : item,
+                )
+              }
+
+              return [
+                ...current,
+                normalizedWorkbook,
+              ]
+            },
+          )
+
+          openWorkbookInternal(
+            normalizedWorkbook,
+          )
+
+          return normalizedWorkbook
+        } catch (error) {
+          console.error(
+            'Failed to open encrypted workbook:',
+            error,
+          )
+
+          notify(
+            error?.message ||
+              'Could not decrypt this workbook.',
+            'error',
+          )
+
+          return null
+        }
+      },
+      [
+        encryptionKey,
+        encryptionReady,
+        notify,
+        openWorkbookInternal,
+      ],
+    )
+
+  /* =====================================================
+     UPLOAD FILE
+  ===================================================== */
+
+  const uploadFile =
+    useCallback(
+      async (file) => {
+        try {
+          if (!ownerId) {
+            notify(
+              'Please sign in before uploading a workbook.',
+              'error',
+            )
+
+            return null
+          }
+
+          if (!encryptionReady) {
+            notify(
+              'Encryption is locked. Please login again before uploading.',
+              'error',
+            )
+
+            return null
+          }
+
+          if (!encryptionKey) {
+            notify(
+              'Encryption key is unavailable. Please login again.',
+              'error',
+            )
+
+            return null
+          }
+
+          await runProcessingAnimation(
+            `Analyzing ${file.name}`,
+          )
+
+          /*
+           * IMPORTANT:
+           *
+           * Encryption key is passed directly from
+           * AuthContext to the upload service.
+           *
+           * The service encrypts the workbook BEFORE
+           * uploading it to Supabase.
+           */
+          const result =
+            await uploadAndParseWorkbook(
+              file,
+              encryptionKey,
+            )
+
+          if (!result?.success) {
+            notify(
+              result?.error ||
+                'Failed to upload and parse workbook.',
+              'error',
+            )
+
+            return null
+          }
+
+          const workbookId =
+            result.workbookId
+
+          await refreshWorkbooks()
+
+          /*
+           * Open using decrypted dataset.
+           */
+          const workbook =
+            await openSupabaseWorkbook(
+              workbookId,
+            )
+
+          if (!workbook) {
+            return null
+          }
+
+          notify(
+            'Encrypted dashboard ready.',
+            'success',
+          )
+
+          return workbook
+        } catch (error) {
+          console.error(
+            'Upload error:',
+            error,
+          )
+
+          const message =
+            error instanceof
+            SpreadsheetError
+              ? error.message
+              : error?.message ||
+                "We couldn't analyze this workbook. Please check the file and try again."
+
+          notify(
+            message,
+            'error',
+          )
+
+          return null
+        }
+      },
+      [
+        ownerId,
+        encryptionKey,
+        encryptionReady,
+        notify,
+        openSupabaseWorkbook,
+        refreshWorkbooks,
+        runProcessingAnimation,
+      ],
+    )
+
+  /* =====================================================
+     DEMO WORKBOOK
+  ===================================================== */
+
+  const loadDemoWorkbook =
+    useCallback(
+      async () => {
+        const parsed =
+          buildDemoWorkbook()
+
+        const workbook =
+          buildWorkbookFromParsed(
+            parsed,
+          )
+
+        setWorkbooks(
+          (current) => [
+            ...current.filter(
+              (item) =>
+                item.id !==
+                workbook.id,
+            ),
+            workbook,
+          ],
+        )
+
+        openWorkbookInternal(
+          workbook,
+        )
+
+        notify(
+          'Demo dashboard ready.',
+          'success',
+        )
+
+        return workbook
+      },
+      [
+        notify,
+        openWorkbookInternal,
+      ],
+    )
+
+  /* =====================================================
+     OPEN WORKBOOK
+  ===================================================== */
+
+  const openWorkbook =
+    useCallback(
+      async (id) => {
+        return openSupabaseWorkbook(
+          id,
+        )
+      },
+      [openSupabaseWorkbook],
+    )
+
+  /* =====================================================
+     CLOSE WORKBOOK
+  ===================================================== */
+
+  const closeWorkbook =
+    useCallback(() => {
+      setActiveWorkbookId(null)
+      setActiveSheetName(null)
+      setFiltersBySheet({})
+    }, [])
+
+  /* =====================================================
+     DELETE WORKBOOK
+  ===================================================== */
+
+  const deleteWorkbookById =
+    useCallback(
+      async (id) => {
+        notify(
+          'Workbook deletion is currently managed from the Supabase workbook service.',
+          'info',
+        )
+
+        await refreshWorkbooks()
+      },
+      [
+        notify,
+        refreshWorkbooks,
+      ],
+    )
+
+  /* =====================================================
+     FAVORITE
+  ===================================================== */
+
+  const toggleFavorite =
+    useCallback(() => {
+      notify(
+        'Favorites will be connected to Supabase in the next step.',
+        'info',
+      )
+    }, [notify])
+
+  /* =====================================================
+     RENAME
+  ===================================================== */
+
+  const renameWorkbookById =
+    useCallback(() => {
+      notify(
+        'Workbook rename will be connected to Supabase in the next step.',
+        'info',
+      )
+    }, [notify])
+
+  /* =====================================================
+     UPDATE WORKBOOK
+  ===================================================== */
+
+  const updateWorkbookWithFile =
+    useCallback(
+      async (
+        id,
+        file,
+      ) => {
+        const existing =
+          workbooks.find(
+            (workbook) =>
+              workbook.id ===
+              id,
+          )
+
+        if (!existing) {
+          notify(
+            'This workbook could not be found.',
+            'error',
+          )
+
+          return null
+        }
+
+        try {
+          await runProcessingAnimation(
+            `Updating ${existing.name}`,
+          )
+
+          const parsed =
+            await parseSpreadsheetFile(
+              file,
+            )
+
+          const newSheets =
+            buildSheetsFromParsed(
+              parsed,
+            )
+
+          const updated = {
+            ...existing,
+
+            name:
+              parsed.fileName.replace(
+                /\.(xlsx|xls|csv|ods)$/i,
+                '',
+              ),
+
+            sheets:
+              newSheets,
+
+            sheetOrder:
+              Object.keys(
+                newSheets,
+              ),
+
+            updatedAt:
+              new Date().toISOString(),
+
+            versions: [
+              ...(existing.versions ||
+                []),
+
+              {
+                version:
+                  (existing.versions
+                    ?.length ||
+                    0) + 1,
+
+                savedAt:
+                  new Date().toISOString(),
+
+                note:
+                  'Workbook updated',
+              },
+            ],
+          }
+
+          setWorkbooks(
+            (current) =>
+              current.map(
+                (workbook) =>
+                  workbook.id === id
+                    ? updated
+                    : workbook,
+              ),
+          )
+
+          openWorkbookInternal(
+            updated,
+          )
+
+          notify(
+            'Workbook updated successfully.',
+            'success',
+          )
+
+          return {
+            updated,
+
+            summaryLines: [
+              'Workbook data updated',
+            ],
+          }
+        } catch (error) {
+          console.error(
+            'Workbook update error:',
+            error,
+          )
+
+          const message =
+            error instanceof
+            SpreadsheetError
+              ? error.message
+              : "We couldn't process the new file."
+
+          notify(
+            message,
+            'error',
+          )
+
+          return null
+        }
+      },
+      [
+        notify,
+        openWorkbookInternal,
+        runProcessingAnimation,
+        workbooks,
+      ],
+    )
+
+  /* =====================================================
+     SHEET
+  ===================================================== */
+
+  const setActiveSheet =
+    useCallback(
+      (name) => {
+        setActiveSheetName(
+          name,
+        )
+      },
+      [],
+    )
+
+  /* =====================================================
+     FILTERS
+  ===================================================== */
+
+  const getFiltersForSheet =
+    useCallback(
+      (sheetName) =>
+        filtersBySheet[
+          sheetName
+        ] ||
+        emptyFilters(),
+      [filtersBySheet],
+    )
+
+  const updateFiltersForSheet =
+    useCallback(
+      (
+        sheetName,
+        updates,
+      ) => {
+        setFiltersBySheet(
+          (previous) => ({
+            ...previous,
+
+            [sheetName]: {
+              ...(previous[
+                sheetName
+              ] ||
+                emptyFilters()),
+
+              ...updates,
+            },
+          }),
+        )
+      },
+      [],
+    )
+
+  const clearFiltersForSheet =
+    useCallback(
+      (sheetName) => {
+        setFiltersBySheet(
+          (previous) => ({
+            ...previous,
+
+            [sheetName]:
+              emptyFilters(),
+          }),
+        )
+      },
+      [],
+    )
+
+  /* =====================================================
+     CHART VISIBILITY
+  ===================================================== */
+
+  const toggleChartVisibility =
+    useCallback(
+      (chartId) => {
+        if (!activeWorkbookId) {
+          return
+        }
+
+        setWorkbooks(
+          (current) =>
+            current.map(
+              (workbook) => {
+                if (
+                  workbook.id !==
+                  activeWorkbookId
+                ) {
+                  return workbook
+                }
+
+                const hidden =
+                  new Set(
+                    workbook
+                      .dashboardConfig
+                      ?.hiddenCharts ||
+                      [],
+                  )
+
+                if (
+                  hidden.has(
+                    chartId,
+                  )
+                ) {
+                  hidden.delete(
+                    chartId,
+                  )
+                } else {
+                  hidden.add(
+                    chartId,
+                  )
+                }
+
+                return {
+                  ...workbook,
+
+                  dashboardConfig:
+                    {
+                      ...workbook.dashboardConfig,
+
+                      hiddenCharts:
+                        [
+                          ...hidden,
+                        ],
+                    },
+                }
+              },
+            ),
+        )
+      },
+      [activeWorkbookId],
+    )
+
+  /* =====================================================
+     RESET DASHBOARD
+  ===================================================== */
+
+  const resetDashboardConfig =
+    useCallback(() => {
+      if (!activeWorkbookId) {
+        return
+      }
+
+      setWorkbooks(
+        (current) =>
+          current.map(
+            (workbook) =>
+              workbook.id ===
+              activeWorkbookId
+                ? {
+                    ...workbook,
+
+                    dashboardConfig:
+                      {},
+                  }
+                : workbook,
+          ),
+      )
+
+      notify(
+        'Dashboard reset to the auto-generated layout.',
+        'success',
+      )
+    }, [
+      activeWorkbookId,
+      notify,
+    ])
+
+  /* =====================================================
+     ACTIVE WORKBOOK
+  ===================================================== */
+
+  const activeWorkbook =
+    useMemo(
+      () =>
+        workbooks.find(
+          (workbook) =>
+            workbook.id ===
+            activeWorkbookId,
+        ) || null,
+      [
+        workbooks,
+        activeWorkbookId,
+      ],
+    )
+
+  /* =====================================================
+     ACTIVE SHEET
+  ===================================================== */
+
+  const activeSheet =
+    useMemo(() => {
+      if (
+        !activeWorkbook ||
+        !activeSheetName
+      ) {
         return null
       }
-    },
-    [runProcessingAnimation, refreshWorkbooks, openWorkbookInternal, notify]
-  )
 
-  const setActiveSheet = useCallback((name) => {
-    setActiveSheetName(name)
-  }, [])
+      return (
+        activeWorkbook.sheets?.[
+          activeSheetName
+        ] || null
+      )
+    }, [
+      activeWorkbook,
+      activeSheetName,
+    ])
 
-  const getFiltersForSheet = useCallback(
-    (sheetName) => filtersBySheet[sheetName] || emptyFilters(),
-    [filtersBySheet]
-  )
+  /* =====================================================
+     PROFILE
+  ===================================================== */
 
-  const updateFiltersForSheet = useCallback((sheetName, updates) => {
-    setFiltersBySheet((prev) => ({
-      ...prev,
-      [sheetName]: { ...(prev[sheetName] || emptyFilters()), ...updates },
-    }))
-  }, [])
+  const activeSheetProfile =
+    useMemo(() => {
+      if (!activeSheet) {
+        return null
+      }
 
-  const clearFiltersForSheet = useCallback((sheetName) => {
-    setFiltersBySheet((prev) => ({ ...prev, [sheetName]: emptyFilters() }))
-  }, [])
+      return profileSheet(
+        activeSheet,
+      )
+    }, [activeSheet])
 
-  const toggleChartVisibility = useCallback(
-    (chartId) => {
-      if (!activeWorkbookId) return
-      const wb = storage.getWorkbook(activeWorkbookId)
-      if (!wb) return
-      const hidden = new Set(wb.dashboardConfig?.hiddenCharts || [])
-      if (hidden.has(chartId)) hidden.delete(chartId)
-      else hidden.add(chartId)
-      wb.dashboardConfig = { ...wb.dashboardConfig, hiddenCharts: [...hidden] }
-      wb.updatedAt = new Date().toISOString()
-      storage.saveWorkbook(wb)
-      refreshWorkbooks()
-    },
-    [activeWorkbookId, refreshWorkbooks]
-  )
-
-  const resetDashboardConfig = useCallback(() => {
-    if (!activeWorkbookId) return
-    const wb = storage.getWorkbook(activeWorkbookId)
-    if (!wb) return
-    wb.dashboardConfig = {}
-    storage.saveWorkbook(wb)
-    refreshWorkbooks()
-    notify('Dashboard reset to the auto-generated layout.', 'success')
-  }, [activeWorkbookId, refreshWorkbooks, notify])
-
-  const activeWorkbook = useMemo(
-    () => workbooks.find((w) => w.id === activeWorkbookId) || (activeWorkbookId ? storage.getWorkbook(activeWorkbookId) : null),
-    [workbooks, activeWorkbookId]
-  )
-
-  const activeSheet = useMemo(() => {
-    if (!activeWorkbook || !activeSheetName) return null
-    return activeWorkbook.sheets[activeSheetName] || null
-  }, [activeWorkbook, activeSheetName])
-
-  const activeSheetProfile = useMemo(() => {
-    if (!activeSheet) return null
-    return profileSheet(activeSheet)
-  }, [activeSheet])
+  /* =====================================================
+     CONTEXT VALUE
+  ===================================================== */
 
   const value = useMemo(
     () => ({
       workbooks,
+
       activeWorkbook,
+
       activeSheetName,
+
       activeSheet,
+
       activeSheetProfile,
+
       processing,
-      filters: activeSheetName ? getFiltersForSheet(activeSheetName) : emptyFilters(),
+
+      filters:
+        activeSheetName
+          ? getFiltersForSheet(
+              activeSheetName,
+            )
+          : emptyFilters(),
+
       uploadFile,
+
       loadDemoWorkbook,
+
       openWorkbook,
+
       closeWorkbook,
+
       deleteWorkbookById,
+
       toggleFavorite,
+
       renameWorkbookById,
+
       updateWorkbookWithFile,
+
       setActiveSheet,
+
       updateFiltersForSheet,
+
       clearFiltersForSheet,
+
       toggleChartVisibility,
+
       resetDashboardConfig,
+
       refreshWorkbooks,
+
+      /*
+       * Expose encryption status so UI can
+       * later show Locked / Unlocked state.
+       */
+      encryptionReady,
     }),
     [
       workbooks,
@@ -324,14 +1234,30 @@ export function WorkbookProvider({ children }) {
       toggleChartVisibility,
       resetDashboardConfig,
       refreshWorkbooks,
-    ]
+      encryptionReady,
+    ],
   )
 
-  return <WorkbookContext.Provider value={value}>{children}</WorkbookContext.Provider>
+  return (
+    <WorkbookContext.Provider
+      value={value}
+    >
+      {children}
+    </WorkbookContext.Provider>
+  )
 }
 
 export function useWorkbook() {
-  const ctx = useContext(WorkbookContext)
-  if (!ctx) throw new Error('useWorkbook must be used within WorkbookProvider')
-  return ctx
+  const context =
+    useContext(
+      WorkbookContext,
+    )
+
+  if (!context) {
+    throw new Error(
+      'useWorkbook must be used within WorkbookProvider',
+    )
+  }
+
+  return context
 }
