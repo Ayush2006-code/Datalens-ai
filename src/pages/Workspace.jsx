@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { Route, Routes, useNavigate, useSearchParams } from 'react-router-dom'
+import {
+  Route,
+  Routes,
+  useNavigate,
+  useSearchParams,
+} from 'react-router-dom'
 
 import Sidebar from '../components/Sidebar'
 import Topbar from '../components/Topbar'
@@ -13,14 +18,33 @@ import ProcessingScreen from '../components/ProcessingScreen'
 import { useWorkbook } from '../context/WorkbookContext.jsx'
 
 export default function Workspace() {
-  const { processing, loadDemoWorkbook } = useWorkbook()
+  const {
+    processing,
+    loadDemoWorkbook,
+  } = useWorkbook()
 
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
-  const [searchQuery, setSearchQuery] = useState('')
-  const [searchParams] = useSearchParams()
+  const [
+    mobileMenuOpen,
+    setMobileMenuOpen,
+  ] = useState(false)
+
+  const [
+    searchQuery,
+    setSearchQuery,
+  ] = useState('')
+
+  const [
+    searchParams,
+  ] = useSearchParams()
 
   const navigate = useNavigate()
-  const demoRequestedRef = useRef(false)
+
+  const demoRequestedRef =
+    useRef(false)
+
+  /* =====================================================
+     DEMO WORKBOOK
+  ===================================================== */
 
   useEffect(() => {
     if (
@@ -29,17 +53,34 @@ export default function Workspace() {
     ) {
       demoRequestedRef.current = true
 
-      loadDemoWorkbook().then((workbook) => {
-        if (workbook) {
-          navigate('/app/dashboard')
-        }
-      })
+      loadDemoWorkbook().then(
+        (workbook) => {
+          if (workbook) {
+            navigate(
+              '/app/dashboard',
+            )
+          }
+        },
+      )
     }
-  }, [searchParams, loadDemoWorkbook, navigate])
+  }, [
+    searchParams,
+    loadDemoWorkbook,
+    navigate,
+  ])
 
-  const handleUploadSuccess = (workbookId) => {
+  /* =====================================================
+     UPLOAD SUCCESS
+  ===================================================== */
+
+  const handleUploadSuccess = (
+    workbookId,
+  ) => {
     if (!workbookId) {
-      console.error('Upload succeeded but no workbook ID was returned.')
+      console.error(
+        'Upload succeeded but no workbook ID was returned.',
+      )
+
       return
     }
 
@@ -48,77 +89,183 @@ export default function Workspace() {
       workbookId,
     )
 
-    navigate('/app/dashboard')
+    navigate(
+      '/app/dashboard',
+    )
   }
+
+  /* =====================================================
+     OPEN WORKBOOK
+  ===================================================== */
+
+  const handleSelectWorkbook = (
+    workbookId,
+  ) => {
+    if (!workbookId) {
+      return
+    }
+
+    sessionStorage.setItem(
+      'datalens.activeWorkbookId',
+      workbookId,
+    )
+
+    navigate(
+      '/app/dashboard',
+    )
+  }
+
+  /* =====================================================
+     MOBILE MENU
+  ===================================================== */
+
+  const closeMobileMenu = () => {
+    setMobileMenuOpen(false)
+  }
+
+  /* =====================================================
+     LAYOUT
+  ===================================================== */
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex">
+
+      {/* =================================================
+          SIDEBAR
+      ================================================= */}
+
       <Sidebar
-        mobileOpen={mobileMenuOpen}
-        onMobileClose={() => setMobileMenuOpen(false)}
+        mobileOpen={
+          mobileMenuOpen
+        }
+        onClose={
+          closeMobileMenu
+        }
       />
 
+      {/* =================================================
+          MAIN AREA
+      ================================================= */}
+
       <div className="flex-1 min-w-0">
+
         <Topbar
-          searchQuery={searchQuery}
-          setSearchQuery={setSearchQuery}
-          onMenuClick={() => setMobileMenuOpen(true)}
+          searchQuery={
+            searchQuery
+          }
+          setSearchQuery={
+            setSearchQuery
+          }
+          onMenuClick={() =>
+            setMobileMenuOpen(
+              true,
+            )
+          }
         />
 
         <main className="min-h-[calc(100vh-64px)]">
+
           <Routes>
-            {/* Home */}
+
+            {/* =================================================
+                HOME
+            ================================================= */}
+
             <Route
               index
-              element={<HomeView />}
+              element={
+                <HomeView />
+              }
             />
 
-            {/* Upload */}
+            {/* =================================================
+                UPLOAD
+            ================================================= */}
+
             <Route
               path="upload"
               element={
                 <UploadView
-                  onUploadSuccess={handleUploadSuccess}
+                  onUploadSuccess={
+                    handleUploadSuccess
+                  }
                 />
               }
             />
 
-            {/* Workbooks
-                DashboardView already contains WorkbooksView
-                and handles workbook selection + dataset loading.
-            */}
+            {/* =================================================
+                WORKBOOKS
+            ================================================= */}
+
             <Route
               path="workbooks"
-              element={<DashboardView />}
+              element={
+                <WorkbooksView
+                  onSelectWorkbook={
+                    handleSelectWorkbook
+                  }
+                  onUploadNew={() =>
+                    navigate(
+                      '/app/upload',
+                    )
+                  }
+                />
+              }
             />
 
-            {/* Dashboard */}
+            {/* =================================================
+                DASHBOARD
+            ================================================= */}
+
             <Route
               path="dashboard"
-              element={<DashboardView />}
+              element={
+                <DashboardView />
+              }
             />
 
-            {/* Settings */}
+            {/* =================================================
+                SETTINGS
+            ================================================= */}
+
             <Route
               path="settings"
-              element={<SettingsView />}
+              element={
+                <SettingsView />
+              }
             />
 
-            {/* Fallback */}
+            {/* =================================================
+                FALLBACK
+            ================================================= */}
+
             <Route
               path="*"
-              element={<HomeView />}
+              element={
+                <HomeView />
+              }
             />
+
           </Routes>
+
         </main>
       </div>
 
+      {/* =================================================
+          PROCESSING SCREEN
+      ================================================= */}
+
       {processing?.active && (
         <ProcessingScreen
-          steps={processing.steps}
-          label={processing.label}
+          steps={
+            processing.steps
+          }
+          label={
+            processing.label
+          }
         />
       )}
+
     </div>
   )
 }
