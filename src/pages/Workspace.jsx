@@ -1,4 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import {
+  useEffect,
+  useRef,
+  useState,
+} from 'react'
+
 import {
   Route,
   Routes,
@@ -15,12 +20,15 @@ import DashboardView from '../components/DashboardView'
 import SettingsView from '../components/SettingsView'
 import ProcessingScreen from '../components/ProcessingScreen'
 
-import { useWorkbook } from '../context/WorkbookContext.jsx'
+import {
+  useWorkbook,
+} from '../context/WorkbookContext.jsx'
 
 export default function Workspace() {
   const {
     processing,
     loadDemoWorkbook,
+    openWorkbook,
   } = useWorkbook()
 
   const [
@@ -37,13 +45,19 @@ export default function Workspace() {
     searchParams,
   ] = useSearchParams()
 
-  const navigate = useNavigate()
+  const navigate =
+    useNavigate()
 
   const demoRequestedRef =
     useRef(false)
 
+  const [
+    openingWorkbook,
+    setOpeningWorkbook,
+  ] = useState(false)
+
   /* =====================================================
-     DEMO WORKBOOK
+     DEMO
   ===================================================== */
 
   useEffect(() => {
@@ -51,7 +65,8 @@ export default function Workspace() {
       searchParams.get('demo') === '1' &&
       !demoRequestedRef.current
     ) {
-      demoRequestedRef.current = true
+      demoRequestedRef.current =
+        true
 
       loadDemoWorkbook().then(
         (workbook) => {
@@ -96,31 +111,67 @@ export default function Workspace() {
 
   /* =====================================================
      OPEN WORKBOOK
+     
+     IMPORTANT:
+     Load workbook FIRST.
+     Navigate SECOND.
+     
+     This removes the extra dashboard/workbook
+     transition that you were seeing.
   ===================================================== */
 
-  const handleSelectWorkbook = (
-    workbookId,
-  ) => {
-    if (!workbookId) {
-      return
+  const handleSelectWorkbook =
+    async (workbookId) => {
+      if (!workbookId) {
+        return
+      }
+
+      try {
+        setOpeningWorkbook(
+          true,
+        )
+
+        const workbook =
+          await openWorkbook(
+            workbookId,
+          )
+
+        if (!workbook) {
+          console.error(
+            'Workbook could not be opened.',
+          )
+
+          return
+        }
+
+        sessionStorage.setItem(
+          'datalens.activeWorkbookId',
+          workbookId,
+        )
+
+        navigate(
+          '/app/dashboard',
+        )
+      } catch (error) {
+        console.error(
+          'Failed to open workbook:',
+          error,
+        )
+      } finally {
+        setOpeningWorkbook(
+          false,
+        )
+      }
     }
-
-    sessionStorage.setItem(
-      'datalens.activeWorkbookId',
-      workbookId,
-    )
-
-    navigate(
-      '/app/dashboard',
-    )
-  }
 
   /* =====================================================
      MOBILE MENU
   ===================================================== */
 
   const closeMobileMenu = () => {
-    setMobileMenuOpen(false)
+    setMobileMenuOpen(
+      false,
+    )
   }
 
   /* =====================================================
@@ -130,10 +181,6 @@ export default function Workspace() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex">
 
-      {/* =================================================
-          SIDEBAR
-      ================================================= */}
-
       <Sidebar
         mobileOpen={
           mobileMenuOpen
@@ -142,10 +189,6 @@ export default function Workspace() {
           closeMobileMenu
         }
       />
-
-      {/* =================================================
-          MAIN AREA
-      ================================================= */}
 
       <div className="flex-1 min-w-0">
 
@@ -249,11 +292,36 @@ export default function Workspace() {
           </Routes>
 
         </main>
+
       </div>
 
-      {/* =================================================
-          PROCESSING SCREEN
-      ================================================= */}
+      {/* =====================================================
+          OPENING WORKBOOK
+      ===================================================== */}
+
+      {openingWorkbook && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/70 backdrop-blur-sm">
+
+          <div className="rounded-xl border border-slate-700 bg-slate-900 px-8 py-7 text-center shadow-2xl">
+
+            <div className="mx-auto h-9 w-9 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+
+            <p className="mt-4 text-sm font-medium text-slate-200">
+              Opening workbook...
+            </p>
+
+            <p className="mt-1 text-xs text-slate-500">
+              Unlocking your encrypted data
+            </p>
+
+          </div>
+
+        </div>
+      )}
+
+      {/* =====================================================
+          PROCESSING
+      ===================================================== */}
 
       {processing?.active && (
         <ProcessingScreen

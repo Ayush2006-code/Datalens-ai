@@ -13,7 +13,9 @@ import {
   X,
 } from 'lucide-react'
 
-import { useWorkbook } from '../context/WorkbookContext.jsx'
+import {
+  useWorkbook,
+} from '../context/WorkbookContext.jsx'
 
 const NAV_ITEMS = [
   {
@@ -43,25 +45,16 @@ export default function Sidebar({
   mobileOpen,
   onClose,
 }) {
-  const navigate = useNavigate()
-  const location = useLocation()
+  const navigate =
+    useNavigate()
+
+  const location =
+    useLocation()
 
   const {
     activeWorkbook,
     closeWorkbook,
   } = useWorkbook()
-
-  /*
-   * The currently opened workbook should only
-   * appear in the sidebar while the dashboard
-   * route is active.
-   */
-  const isDashboardRoute =
-    location.pathname ===
-      '/app/dashboard' ||
-    location.pathname.startsWith(
-      '/app/dashboard/',
-    )
 
   /* =====================================================
      CLOSE WORKBOOK
@@ -79,7 +72,9 @@ export default function Sidebar({
       'datalens.activeWorkbookId',
     )
 
-    navigate('/app/workbooks')
+    navigate(
+      '/app/workbooks',
+    )
 
     if (onClose) {
       onClose()
@@ -87,7 +82,7 @@ export default function Sidebar({
   }
 
   /* =====================================================
-     NAVIGATION
+     MOBILE NAVIGATION
   ===================================================== */
 
   const handleNavigation = () => {
@@ -96,176 +91,280 @@ export default function Sidebar({
     }
   }
 
-  const content = (
-    <div className="flex flex-col h-full">
-
+  return (
+    <>
       {/* =================================================
-          HEADER
+          DESKTOP
       ================================================= */}
 
-      <div className="flex items-center justify-between px-5 h-16 border-b border-border shrink-0">
+      <aside className="hidden md:flex md:w-64 shrink-0 border-r border-border bg-surface-raised">
 
-        <div className="flex items-center gap-2 font-display font-semibold">
+        <div className="flex flex-col h-full w-full">
 
-          <div className="h-7 w-7 rounded-md bg-accent/15 text-accent flex items-center justify-center">
-            <Sparkles size={16} />
-          </div>
+          {/* Logo */}
 
-          <span>
-            DataLens AI
-          </span>
+          <div className="flex items-center justify-between px-5 h-16 border-b border-border shrink-0">
 
-        </div>
+            <div className="flex items-center gap-2 font-display font-semibold">
 
-        <button
-          type="button"
-          onClick={onClose}
-          className="md:hidden text-ink-faint hover:text-ink transition-colors"
-          aria-label="Close menu"
-        >
-          <X size={18} />
-        </button>
-
-      </div>
-
-      {/* =================================================
-          MAIN NAVIGATION
-      ================================================= */}
-
-      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-
-        {NAV_ITEMS.map(
-          (item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.end}
-              onClick={
-                handleNavigation
-              }
-              className={({ isActive }) =>
-                `flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors ${
-                  isActive
-                    ? 'bg-accent-soft text-accent font-medium'
-                    : 'text-ink-muted hover:text-ink hover:bg-surface-sunken'
-                }`
-              }
-            >
-              <item.icon
-                size={16}
-              />
+              <div className="h-7 w-7 rounded-md bg-accent/15 text-accent flex items-center justify-center">
+                <Sparkles
+                  size={16}
+                />
+              </div>
 
               <span>
-                {item.label}
+                DataLens AI
               </span>
-            </NavLink>
-          ),
-        )}
 
-        {/* =================================================
-            ACTIVE WORKBOOK
-            ONLY SHOW ON DASHBOARD
-        ================================================= */}
+            </div>
 
-        {activeWorkbook &&
-          isDashboardRoute && (
-            <div className="mt-4">
+          </div>
 
-              <div className="flex items-center gap-1">
+          {/* Navigation */}
 
-                {/* Workbook */}
+          <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
 
+            {NAV_ITEMS.map(
+              (item) => (
                 <NavLink
-                  to="/app/dashboard"
+                  key={
+                    item.to
+                  }
+                  to={
+                    item.to
+                  }
+                  end={
+                    item.end
+                  }
                   onClick={
                     handleNavigation
                   }
-                  className={({ isActive }) =>
-                    `flex-1 min-w-0 flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm border transition-colors ${
+                  className={({
+                    isActive,
+                  }) =>
+                    `flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors ${
                       isActive
-                        ? 'border-accent/40 bg-accent-soft text-accent font-medium'
-                        : 'border-border text-ink-muted hover:text-ink'
+                        ? 'bg-accent-soft text-accent font-medium'
+                        : 'text-ink-muted hover:text-ink hover:bg-surface-sunken'
                     }`
                   }
                 >
 
-                  <span className="h-1.5 w-1.5 rounded-full bg-accent shrink-0" />
+                  <item.icon
+                    size={16}
+                  />
 
-                  <span className="truncate">
+                  <span>
                     {
-                      activeWorkbook.name
+                      item.label
                     }
                   </span>
 
                 </NavLink>
+              ),
+            )}
 
-                {/* Close */}
+            {/* =================================================
+                ACTIVE WORKBOOK
+            ================================================= */}
 
-                <button
-                  type="button"
-                  onClick={
-                    handleCloseWorkbook
-                  }
-                  className="
-                    h-8
-                    w-8
-                    shrink-0
-                    rounded-lg
-                    border
-                    border-border
-                    text-ink-faint
-                    flex
-                    items-center
-                    justify-center
-                    transition-colors
-                    hover:text-red-400
-                    hover:border-red-400/40
-                    hover:bg-red-400/10
-                  "
-                  aria-label="Close workbook"
-                  title="Close workbook"
-                >
-                  <X size={15} />
-                </button>
+            {activeWorkbook && (
+              <div className="mt-4">
+
+                <div className="flex items-center gap-1">
+
+                  <NavLink
+                    to="/app/dashboard"
+                    onClick={
+                      handleNavigation
+                    }
+                    className={({ isActive }) =>
+                      `flex-1 min-w-0 flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm border transition-colors ${
+                        isActive
+                          ? 'border-accent/40 bg-accent-soft text-accent font-medium'
+                          : 'border-border text-ink-muted hover:text-ink hover:bg-surface-sunken'
+                      }`
+                    }
+                  >
+
+                    <span className="h-1.5 w-1.5 rounded-full bg-accent shrink-0" />
+
+                    <span className="truncate">
+                      {
+                        activeWorkbook.name
+                      }
+                    </span>
+
+                  </NavLink>
+
+                  <button
+                    type="button"
+                    onClick={
+                      handleCloseWorkbook
+                    }
+                    className="h-8 w-8 shrink-0 rounded-lg border border-border text-ink-faint flex items-center justify-center transition-colors hover:text-red-400 hover:border-red-400/40 hover:bg-red-400/10"
+                    aria-label="Close workbook"
+                    title="Close workbook"
+                  >
+                    <X
+                      size={15}
+                    />
+                  </button>
+
+                </div>
 
               </div>
+            )}
 
-            </div>
-          )}
+          </nav>
 
-      </nav>
+          {/* Footer */}
 
-      {/* =================================================
-          FOOTER
-      ================================================= */}
+          <div className="px-5 py-4 border-t border-border text-xs text-ink-faint">
+            DataLens AI · v1.0
+          </div>
 
-      <div className="px-5 py-4 border-t border-border text-xs text-ink-faint">
-        DataLens AI · v1.0 (local demo)
-      </div>
+        </div>
 
-    </div>
-  )
-
-  return (
-    <>
-      {/* Desktop */}
-
-      <aside className="hidden md:flex md:w-64 shrink-0 border-r border-border bg-surface-raised">
-        {content}
       </aside>
 
-      {/* Mobile */}
+      {/* =================================================
+          MOBILE
+      ================================================= */}
 
       {mobileOpen && (
         <div className="fixed inset-0 z-40 md:hidden">
 
           <div
             className="absolute inset-0 bg-black/50"
-            onClick={onClose}
+            onClick={
+              onClose
+            }
           />
 
           <aside className="absolute left-0 top-0 bottom-0 w-72 bg-surface-raised border-r border-border">
-            {content}
+
+            <div className="flex flex-col h-full">
+
+              <div className="flex items-center justify-between px-5 h-16 border-b border-border">
+
+                <div className="flex items-center gap-2 font-display font-semibold">
+
+                  <div className="h-7 w-7 rounded-md bg-accent/15 text-accent flex items-center justify-center">
+                    <Sparkles
+                      size={16}
+                    />
+                  </div>
+
+                  DataLens AI
+
+                </div>
+
+                <button
+                  type="button"
+                  onClick={
+                    onClose
+                  }
+                  className="text-ink-faint hover:text-ink"
+                >
+                  <X
+                    size={18}
+                  />
+                </button>
+
+              </div>
+
+              <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+
+                {NAV_ITEMS.map(
+                  (item) => (
+                    <NavLink
+                      key={
+                        item.to
+                      }
+                      to={
+                        item.to
+                      }
+                      end={
+                        item.end
+                      }
+                      onClick={
+                        handleNavigation
+                      }
+                      className={({
+                        isActive,
+                      }) =>
+                        `flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors ${
+                          isActive
+                            ? 'bg-accent-soft text-accent font-medium'
+                            : 'text-ink-muted hover:text-ink hover:bg-surface-sunken'
+                        }`
+                      }
+                    >
+
+                      <item.icon
+                        size={16}
+                      />
+
+                      {
+                        item.label
+                      }
+
+                    </NavLink>
+                  ),
+                )}
+
+                {activeWorkbook && (
+                  <div className="mt-4">
+
+                    <div className="flex items-center gap-1">
+
+                      <NavLink
+                        to="/app/dashboard"
+                        onClick={
+                          handleNavigation
+                        }
+                        className={({ isActive }) =>
+                          `flex-1 min-w-0 flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm border transition-colors ${
+                            isActive
+                              ? 'border-accent/40 bg-accent-soft text-accent font-medium'
+                              : 'border-border text-ink-muted'
+                          }`
+                        }
+                      >
+
+                        <span className="h-1.5 w-1.5 rounded-full bg-accent shrink-0" />
+
+                        <span className="truncate">
+                          {
+                            activeWorkbook.name
+                          }
+                        </span>
+
+                      </NavLink>
+
+                      <button
+                        type="button"
+                        onClick={
+                          handleCloseWorkbook
+                        }
+                        className="h-8 w-8 shrink-0 rounded-lg border border-border text-ink-faint flex items-center justify-center hover:text-red-400 hover:border-red-400/40"
+                      >
+                        <X
+                          size={15}
+                        />
+                      </button>
+
+                    </div>
+
+                  </div>
+                )}
+
+              </nav>
+
+            </div>
+
           </aside>
 
         </div>

@@ -9,87 +9,489 @@ import {
 
 import * as authService from '../services/auth.js'
 import { supabase } from '../services/supabaseClient.js'
+
 import {
   unlockUserEncryption,
 } from '../services/encryptionService.js'
 
 const AuthContext = createContext(null)
 
-export function AuthProvider({ children }) {
-  const [session, setSession] = useState(null)
-  const [authLoading, setAuthLoading] = useState(true)
+/* =========================================================
+   PERSISTENT ENCRYPTION KEY STORAGE
 
-  // Encryption key stays only in browser memory.
-  const [encryptionKey, setEncryptionKey] = useState(null)
-  const [encryptionReady, setEncryptionReady] = useState(false)
+   The encryption key is stored as a CryptoKey inside
+   IndexedDB.
+
+   We NEVER store:
+   - user password
+   - password-derived key
+   - plaintext workbook data
+
+   Supabase never receives the DEK.
+========================================================= */
+
+const DB_NAME = 'datalens-secure-storage'
+const DB_VERSION = 1
+const STORE_NAME = 'encryption-keys'
+
+const openEncryptionDB = () => {
+  return new Promise((resolve, reject) => {
+    if (
+      typeof window === 'undefined' ||
+      !window.indexedDB
+    ) {
+      reject(
+        new Error(
+          'Secure browser storage is not available.',
+        ),
+      )
+
+      return
+    }
+
+    const request =
+      window.indexedDB.open(
+        DB_NAME,
+        DB_VERSION,
+      )
+
+    request.onupgradeneeded = () => {
+      const db = request.result
+
+      if (
+        !db.objectStoreNames.contains(
+          STORE_NAME,
+        )
+      ) {
+        db.createObjectStore(
+          STORE_NAME,
+        )
+      }
+    }
+
+    request.onsuccess = () => {
+      resolve(
+        request.result,
+      )
+    }
+
+    request.onerror = () => {
+      reject(
+        request.error ||
+          new Error(
+            'Could not open secure browser storage.',
+          ),
+      )
+    }
+  })
+}
+
+/* =========================================================
+   SAVE ENCRYPTION KEY
+========================================================= */
+
+const savePersistentEncryptionKey =
+  async (
+    userId,
+    encryptionKey,
+  ) => {
+    if (
+      !userId ||
+      !encryptionKey
+    ) {
+      return
+    }
+
+    const db =
+      await openEncryptionDB()
+
+    return new Promise(
+      (
+        resolve,
+        reject,
+      ) => {
+        const transaction =
+          db.transaction(
+            STORE_NAME,
+            'readwrite',
+          )
+
+        const store =
+          transaction.objectStore(
+            STORE_NAME,
+          )
+
+        /*
+         * CryptoKey is structured-cloneable and can
+         * be stored by IndexedDB without converting
+         * it to plaintext.
+         */
+        store.put(
+          encryptionKey,
+          userId,
+        )
+
+        transaction.oncomplete =
+          () => {
+            db.close()
+            resolve()
+          }
+
+        transaction.onerror =
+          () => {
+            db.close()
+
+            reject(
+              transaction.error ||
+                new Error(
+                  'Could not save encryption key.',
+                ),
+            )
+          }
+      },
+    )
+  }
+
+/* =========================================================
+   GET PERSISTENT ENCRYPTION KEY
+========================================================= */
+
+const getPersistentEncryptionKey =
+  async (
+    userId,
+  ) => {
+    if (!userId) {
+      return null
+    }
+
+    try {
+      const db =
+        await openEncryptionDB()
+
+      return await new Promise(
+        (
+          resolve,
+          reject,
+        ) => {
+          const transaction =
+            db.transaction(
+              STORE_NAME,
+              'readonly',
+            )
+
+          const store =
+            transaction.objectStore(
+              STORE_NAME,
+            )
+
+          const request =
+            store.get(
+              userId,
+            )
+
+          request.onsuccess =
+            () => {
+              db.close()
+
+              resolve(
+                request.result ||
+                  null,
+              )
+            }
+
+          request.onerror =
+            () => {
+              db.close()
+
+              reject(
+                request.error ||
+                  new Error(
+                    'Could not read encryption key.',
+                  ),
+              )
+            }
+        },
+      )
+    } catch (error) {
+      console.error(
+        'Could not restore persistent encryption key:',
+        error,
+      )
+
+      return null
+    }
+  }
+
+/* =========================================================
+   DELETE PERSISTENT ENCRYPTION KEY
+========================================================= */
+
+const deletePersistentEncryptionKey =
+  async (
+    userId,
+  ) => {
+    if (!userId) {
+      return
+    }
+
+    try {
+      const db =
+        await openEncryptionDB()
+
+      await new Promise(
+        (
+          resolve,
+          reject,
+        ) => {
+          const transaction =
+            db.transaction(
+              STORE_NAME,
+              'readwrite',
+            )
+
+          const store =
+            transaction.objectStore(
+              STORE_NAME,
+            )
+
+          store.delete(
+            userId,
+          )
+
+          transaction.oncomplete =
+            () => {
+              db.close()
+              resolve()
+            }
+
+          transaction.onerror =
+            () => {
+              db.close()
+
+              reject(
+                transaction.error ||
+                  new Error(
+                    'Could not delete encryption key.',
+                  ),
+              )
+            }
+        },
+      )
+    } catch (error) {
+      console.error(
+        'Could not delete persistent encryption key:',
+        error,
+      )
+    }
+  }
+
+/* =========================================================
+   USER SESSION NORMALIZER
+========================================================= */
+
+const buildSession = (
+  user,
+) => {
+  if (!user) {
+    return null
+  }
+
+  return {
+    userId: user.id,
+
+    name:
+      user.user_metadata?.name ||
+      user.user_metadata?.full_name ||
+      '',
+
+    email:
+      user.email || '',
+  }
+}
+
+/* =========================================================
+   AUTH PROVIDER
+========================================================= */
+
+export function AuthProvider({
+  children,
+}) {
+  const [
+    session,
+    setSession,
+  ] = useState(null)
+
+  const [
+    authLoading,
+    setAuthLoading,
+  ] = useState(true)
+
+  /*
+   * Actual AES DEK currently available
+   * to the application.
+   */
+  const [
+    encryptionKey,
+    setEncryptionKey,
+  ] = useState(null)
+
+  /*
+   * true = application can safely use encrypted data.
+   */
+  const [
+    encryptionReady,
+    setEncryptionReady,
+  ] = useState(false)
+
+  /* =======================================================
+     RESTORE SESSION + ENCRYPTION KEY
+  ======================================================= */
 
   useEffect(() => {
     let mounted = true
 
-    const loadSession = async () => {
-      try {
-        const currentSession =
-          await authService.getSession()
+    const loadSession =
+      async () => {
+        try {
+          const currentSession =
+            await authService.getSession()
 
-        if (!mounted) return
+          if (!mounted) {
+            return
+          }
 
-        if (currentSession?.user) {
-          const user = currentSession.user
+          const user =
+            currentSession?.user
 
-          setSession({
-            userId: user.id,
-            name:
-              user.user_metadata?.name ||
-              user.user_metadata?.full_name ||
-              '',
-            email: user.email || '',
-          })
-        } else {
-          setSession(null)
-        }
-      } catch (error) {
-        console.error(
-          'Failed to load auth session:',
-          error,
-        )
+          if (!user) {
+            setSession(null)
+            setEncryptionKey(null)
+            setEncryptionReady(false)
+            return
+          }
 
-        if (mounted) {
-          setSession(null)
-        }
-      } finally {
-        if (mounted) {
-          setAuthLoading(false)
+          /*
+           * Restore normal Supabase session.
+           */
+          const nextSession =
+            buildSession(
+              user,
+            )
+
+          setSession(
+            nextSession,
+          )
+
+          /*
+           * IMPORTANT:
+           *
+           * We do NOT ask for the password again.
+           *
+           * Try restoring the already unlocked DEK
+           * from browser IndexedDB.
+           */
+          const savedKey =
+            await getPersistentEncryptionKey(
+              user.id,
+            )
+
+          if (
+            mounted &&
+            savedKey
+          ) {
+            setEncryptionKey(
+              savedKey,
+            )
+
+            setEncryptionReady(
+              true,
+            )
+          } else if (
+            mounted
+          ) {
+            /*
+             * User is authenticated but this browser
+             * does not have the local encryption key.
+             *
+             * This can happen on:
+             * - new browser
+             * - new device
+             * - cleared site data
+             */
+            setEncryptionKey(
+              null,
+            )
+
+            setEncryptionReady(
+              false,
+            )
+          }
+        } catch (error) {
+          console.error(
+            'Failed to restore auth/encryption session:',
+            error,
+          )
+
+          if (mounted) {
+            setSession(null)
+            setEncryptionKey(null)
+            setEncryptionReady(false)
+          }
+        } finally {
+          if (mounted) {
+            setAuthLoading(
+              false,
+            )
+          }
         }
       }
-    }
 
     loadSession()
 
+    /* =====================================================
+       SUPABASE AUTH STATE
+    ===================================================== */
+
     const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(
-      (_event, supabaseSession) => {
-        if (!mounted) return
-
-        const user =
-          supabaseSession?.user ?? null
-
-        if (user) {
-          setSession({
-            userId: user.id,
-            name:
-              user.user_metadata?.name ||
-              user.user_metadata?.full_name ||
-              '',
-            email: user.email || '',
-          })
-        } else {
-          setSession(null)
-          setEncryptionKey(null)
-          setEncryptionReady(false)
-        }
+      data: {
+        subscription,
       },
-    )
+    } =
+      supabase.auth.onAuthStateChange(
+        (
+          event,
+          supabaseSession,
+        ) => {
+          if (!mounted) {
+            return
+          }
+
+          const user =
+            supabaseSession?.user ||
+            null
+
+          if (user) {
+            setSession(
+              buildSession(
+                user,
+              ),
+            )
+
+            /*
+             * Do NOT clear encryptionKey here.
+             *
+             * SIGNED_IN can fire during session
+             * restoration and clearing the key here
+             * would cause the exact problem we are
+             * fixing.
+             */
+          } else {
+            setSession(null)
+            setEncryptionKey(null)
+            setEncryptionReady(false)
+          }
+        },
+      )
 
     return () => {
       mounted = false
@@ -97,26 +499,37 @@ export function AuthProvider({ children }) {
     }
   }, [])
 
-  /* =====================================================
+  /* =======================================================
      LOGIN
-  ===================================================== */
+  ======================================================= */
 
   const login = useCallback(
-    async (email, password) => {
-      setAuthLoading(true)
-      setEncryptionReady(false)
+    async (
+      email,
+      password,
+    ) => {
+      setAuthLoading(
+        true,
+      )
+
+      setEncryptionReady(
+        false,
+      )
 
       try {
         /*
-         * 1. Authenticate with Supabase.
+         * 1. Authenticate user.
          */
         const result =
-          await authService.login({
-            email,
-            password,
-          })
+          await authService.login(
+            {
+              email,
+              password,
+            },
+          )
 
-        const user = result?.user
+        const user =
+          result?.user
 
         if (!user) {
           throw new Error(
@@ -125,11 +538,7 @@ export function AuthProvider({ children }) {
         }
 
         /*
-         * 2. Unlock the user's encryption key.
-         *
-         * Password is used only in this function.
-         * It is NOT stored in localStorage,
-         * sessionStorage, React state, or Supabase.
+         * 2. Unlock DEK using password.
          */
         const dek =
           await unlockUserEncryption(
@@ -138,237 +547,306 @@ export function AuthProvider({ children }) {
           )
 
         /*
-         * 3. Keep DEK only in browser memory.
+         * 3. Keep key in memory.
          */
-        setEncryptionKey(dek)
-        setEncryptionReady(true)
+        setEncryptionKey(
+          dek,
+        )
 
-        const nextSession = {
-          userId: user.id,
-          name:
-            user.user_metadata?.name ||
-            user.user_metadata?.full_name ||
-            '',
-          email: user.email || '',
-        }
+        /*
+         * 4. IMPORTANT:
+         *
+         * Persist the CryptoKey locally so that
+         * page refresh / npm restart does not
+         * require another login.
+         */
+        await savePersistentEncryptionKey(
+          user.id,
+          dek,
+        )
 
-        setSession(nextSession)
+        setEncryptionReady(
+          true,
+        )
+
+        const nextSession =
+          buildSession(
+            user,
+          )
+
+        setSession(
+          nextSession,
+        )
 
         return nextSession
       } catch (error) {
-        /*
-         * If encryption unlock fails, do not leave
-         * a partially authenticated encryption state.
-         */
-        setEncryptionKey(null)
-        setEncryptionReady(false)
-
-        throw error
-      } finally {
-        setAuthLoading(false)
-      }
-    },
-    [],
-  )
-
-  /* =====================================================
-     REGISTER
-  ===================================================== */
-
-  const register = useCallback(
-    async (payload) => {
-      setAuthLoading(true)
-
-      try {
-        /*
-         * payload normally contains:
-         * email
-         * password
-         * fullName
-         */
-        const result =
-          await authService.signup(payload)
-
-        /*
-         * If Supabase immediately creates a session,
-         * unlock the DEK now.
-         */
-        if (
-          result?.session?.user &&
-          payload?.password
-        ) {
-          const user =
-            result.session.user
-
-          const dek =
-            await unlockUserEncryption(
-              user.id,
-              payload.password,
-            )
-
-          setEncryptionKey(dek)
-          setEncryptionReady(true)
-
-          const nextSession = {
-            userId: user.id,
-            name:
-              user.user_metadata?.name ||
-              user.user_metadata?.full_name ||
-              '',
-            email:
-              user.email || '',
-          }
-
-          setSession(nextSession)
-
-          return {
-            ...result,
-            session: nextSession,
-          }
-        }
-
-        /*
-         * If email confirmation is enabled,
-         * there may not be a session yet.
-         */
-        if (result?.user) {
-          setSession({
-            userId: result.user.id,
-            name:
-              result.user.user_metadata?.name ||
-              result.user.user_metadata?.full_name ||
-              '',
-            email:
-              result.user.email || '',
-          })
-        }
-
-        return result
-      } finally {
-        setAuthLoading(false)
-      }
-    },
-    [],
-  )
-
-  /* =====================================================
-     LOGOUT
-  ===================================================== */
-
-  const logout = useCallback(
-    async () => {
-      setAuthLoading(true)
-
-      try {
-        await authService.logout()
-
-        /*
-         * Destroy the in-memory encryption key.
-         */
-        setEncryptionKey(null)
-        setEncryptionReady(false)
-        setSession(null)
-      } finally {
-        setAuthLoading(false)
-      }
-    },
-    [],
-  )
-
-  /* =====================================================
-     UPDATE PROFILE
-  ===================================================== */
-
-  const updateProfile = useCallback(
-    async (updates) => {
-      if (!session) return null
-
-      /*
-       * Keep compatibility with existing UI.
-       *
-       * Supabase profile update.
-       */
-      const {
-        data,
-        error,
-      } = await supabase.auth.updateUser({
-        data: updates,
-      })
-
-      if (error) {
         console.error(
-          'Update profile error:',
+          'Login/encryption unlock error:',
           error,
         )
 
+        setEncryptionKey(
+          null,
+        )
+
+        setEncryptionReady(
+          false,
+        )
+
         throw error
+      } finally {
+        setAuthLoading(
+          false,
+        )
       }
-
-      const user = data.user
-
-      const nextSession = {
-        userId: user.id,
-        name:
-          user.user_metadata?.name ||
-          user.user_metadata?.full_name ||
-          '',
-        email:
-          user.email || '',
-      }
-
-      setSession(nextSession)
-
-      return nextSession
     },
-    [session],
+    [],
   )
 
-  /* =====================================================
+  /* =======================================================
+     REGISTER
+  ======================================================= */
+
+  const register =
+    useCallback(
+      async (
+        payload,
+      ) => {
+        setAuthLoading(
+          true,
+        )
+
+        try {
+          const result =
+            await authService.signup(
+              payload,
+            )
+
+          /*
+           * If Supabase immediately provides a session,
+           * unlock encryption immediately.
+           */
+          if (
+            result?.session?.user &&
+            payload?.password
+          ) {
+            const user =
+              result.session.user
+
+            const dek =
+              await unlockUserEncryption(
+                user.id,
+                payload.password,
+              )
+
+            setEncryptionKey(
+              dek,
+            )
+
+            await savePersistentEncryptionKey(
+              user.id,
+              dek,
+            )
+
+            setEncryptionReady(
+              true,
+            )
+
+            const nextSession =
+              buildSession(
+                user,
+              )
+
+            setSession(
+              nextSession,
+            )
+
+            return {
+              ...result,
+              session:
+                nextSession,
+            }
+          }
+
+          /*
+           * Email confirmation enabled.
+           *
+           * User has no active session yet.
+           */
+          if (
+            result?.user
+          ) {
+            setSession(
+              buildSession(
+                result.user,
+              ),
+            )
+          }
+
+          return result
+        } finally {
+          setAuthLoading(
+            false,
+          )
+        }
+      },
+      [],
+    )
+
+  /* =======================================================
+     LOGOUT
+  ======================================================= */
+
+  const logout =
+    useCallback(
+      async () => {
+        setAuthLoading(
+          true,
+        )
+
+        const userId =
+          session?.userId
+
+        try {
+          /*
+           * Supabase logout.
+           */
+          await authService.logout()
+
+          /*
+           * IMPORTANT:
+           *
+           * Remove the persistent DEK when the user
+           * explicitly logs out.
+           */
+          if (userId) {
+            await deletePersistentEncryptionKey(
+              userId,
+            )
+          }
+
+          /*
+           * Clear memory.
+           */
+          setEncryptionKey(
+            null,
+          )
+
+          setEncryptionReady(
+            false,
+          )
+
+          setSession(
+            null,
+          )
+        } finally {
+          setAuthLoading(
+            false,
+          )
+        }
+      },
+      [session],
+    )
+
+  /* =======================================================
+     UPDATE PROFILE
+  ======================================================= */
+
+  const updateProfile =
+    useCallback(
+      async (
+        updates,
+      ) => {
+        if (!session) {
+          return null
+        }
+
+        const {
+          data,
+          error,
+        } =
+          await supabase.auth.updateUser(
+            {
+              data: updates,
+            },
+          )
+
+        if (error) {
+          console.error(
+            'Update profile error:',
+            error,
+          )
+
+          throw error
+        }
+
+        const user =
+          data.user
+
+        const nextSession =
+          buildSession(
+            user,
+          )
+
+        setSession(
+          nextSession,
+        )
+
+        return nextSession
+      },
+      [session],
+    )
+
+  /* =======================================================
      CONTEXT VALUE
-  ===================================================== */
+  ======================================================= */
 
-  const value = useMemo(
-    () => ({
-      session,
-      user: session,
+  const value =
+    useMemo(
+      () => ({
+        session,
+        user: session,
 
-      authLoading,
+        authLoading,
 
-      login,
-      register,
-      logout,
-      updateProfile,
+        login,
+        register,
+        logout,
+        updateProfile,
 
-      /*
-       * Encryption state.
-       *
-       * Components that need to encrypt/decrypt
-       * data can use encryptionKey.
-       */
-      encryptionKey,
-      encryptionReady,
-    }),
-    [
-      session,
-      authLoading,
-      login,
-      register,
-      logout,
-      updateProfile,
-      encryptionKey,
-      encryptionReady,
-    ],
-  )
+        encryptionKey,
+        encryptionReady,
+      }),
+      [
+        session,
+        authLoading,
+        login,
+        register,
+        logout,
+        updateProfile,
+        encryptionKey,
+        encryptionReady,
+      ],
+    )
 
   return (
-    <AuthContext.Provider value={value}>
+    <AuthContext.Provider
+      value={value}
+    >
       {children}
     </AuthContext.Provider>
   )
 }
 
+/* =========================================================
+   USE AUTH
+========================================================= */
+
 export function useAuth() {
-  const ctx = useContext(AuthContext)
+  const ctx =
+    useContext(
+      AuthContext,
+    )
 
   if (!ctx) {
     throw new Error(

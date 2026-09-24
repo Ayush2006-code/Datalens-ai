@@ -1,373 +1,454 @@
-import React, { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import React, {
+  useEffect,
+  useMemo,
+  useState,
+} from 'react'
 
-import WorkbooksView from './WorkbooksView'
-import UploadView from './UploadView'
+import {
+  useNavigate,
+} from 'react-router-dom'
+
 import DataTable from './DataTable'
 import InsightsView from './InsightsView'
 import ChartCard from './ChartCard'
 import AskYourData from './AskYourData'
 
-import { useWorkbook } from '../context/WorkbookContext.jsx'
+import {
+  useWorkbook,
+} from '../context/WorkbookContext.jsx'
 
 export default function DashboardView() {
-  const navigate = useNavigate()
+  const navigate =
+    useNavigate()
 
   const {
     activeWorkbook,
-    openWorkbook,
-    closeWorkbook,
+    activeSheetName,
+    activeSheet,
+    setActiveSheet,
   } = useWorkbook()
 
-  const [activeTab, setActiveTab] =
-    useState('workbooks')
+  const [
+    previewSubTab,
+    setPreviewSubTab,
+  ] = useState('insights')
 
-  const [previewSubTab, setPreviewSubTab] =
-    useState('insights')
-
-  const [loading, setLoading] =
-    useState(false)
-
-  const [selectedDatasetId, setSelectedDatasetId] =
-    useState(null)
+  /* =====================================================
+     SELECTED DATASET
+  ===================================================== */
 
   const datasets =
     activeWorkbook?.datasets || []
 
-  const selectedDataset =
-    activeWorkbook?.datasets?.find(
-      (dataset) =>
-        dataset.id === selectedDatasetId,
-    ) ||
-    activeWorkbook?.datasets?.[0] ||
-    null
+  const [
+    selectedDatasetId,
+    setSelectedDatasetId,
+  ] = useState(null)
 
   /* =====================================================
-     SELECT WORKBOOK
+     KEEP DATASET IN SYNC WITH ACTIVE WORKBOOK
   ===================================================== */
 
-  const handleSelectWorkbook = async (
-    workbookId,
-  ) => {
-    try {
-      setLoading(true)
+  useEffect(() => {
+    if (!activeWorkbook) {
+      setSelectedDatasetId(null)
+      return
+    }
 
-      const workbook =
-        await openWorkbook(workbookId)
+    const workbookDatasets =
+      activeWorkbook.datasets || []
 
-      if (!workbook) {
-        return
+    if (
+      workbookDatasets.length === 0
+    ) {
+      setSelectedDatasetId(null)
+      return
+    }
+
+    const currentExists =
+      workbookDatasets.some(
+        (dataset) =>
+          dataset.id ===
+          selectedDatasetId,
+      )
+
+    if (!currentExists) {
+      setSelectedDatasetId(
+        workbookDatasets[0].id,
+      )
+    }
+  }, [
+    activeWorkbook,
+    selectedDatasetId,
+  ])
+
+  /* =====================================================
+     SELECTED DATASET OBJECT
+  ===================================================== */
+
+  const selectedDataset =
+    useMemo(() => {
+      if (!datasets.length) {
+        return null
       }
 
-      setSelectedDatasetId(
-        workbook.datasets?.[0]?.id ||
-          null,
+      return (
+        datasets.find(
+          (dataset) =>
+            dataset.id ===
+            selectedDatasetId,
+        ) ||
+        datasets[0]
       )
-
-      setPreviewSubTab('insights')
-      setActiveTab('preview')
-
-      /*
-       * IMPORTANT:
-       *
-       * Change URL after workbook has successfully
-       * opened.
-       *
-       * This makes the Dashboard route active, so
-       * the sidebar/dashboard navigation state is
-       * correct.
-       */
-      navigate('/app/dashboard')
-    } catch (error) {
-      console.error(
-        'Failed to open workbook:',
-        error,
-      )
-    } finally {
-      setLoading(false)
-    }
-  }
+    }, [
+      datasets,
+      selectedDatasetId,
+    ])
 
   /* =====================================================
-     UPLOAD SUCCESS
+     FALLBACK
+     
+     If dashboard route is opened without an active
+     workbook, send user back to workbook list.
   ===================================================== */
 
-  const handleUploadSuccess = async (
-    workbookId,
-  ) => {
-    await handleSelectWorkbook(
-      workbookId,
+  useEffect(() => {
+    if (!activeWorkbook) {
+      const timer =
+        setTimeout(() => {
+          navigate(
+            '/app/workbooks',
+            {
+              replace: true,
+            },
+          )
+        }, 0)
+
+      return () =>
+        clearTimeout(timer)
+    }
+  }, [
+    activeWorkbook,
+    navigate,
+  ])
+
+  /* =====================================================
+     NO ACTIVE WORKBOOK
+  ===================================================== */
+
+  if (!activeWorkbook) {
+    return (
+      <div className="min-h-[calc(100vh-64px)] bg-slate-950 text-slate-100 flex items-center justify-center">
+
+        <div className="text-center">
+
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-slate-900 text-2xl">
+            📊
+          </div>
+
+          <h2 className="text-lg font-semibold">
+            No workbook is open
+          </h2>
+
+          <p className="mt-2 text-sm text-slate-400">
+            Please select a workbook to view its dashboard.
+          </p>
+
+          <button
+            type="button"
+            onClick={() =>
+              navigate(
+                '/app/workbooks',
+              )
+            }
+            className="mt-5 rounded-lg bg-emerald-500 px-5 py-2.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400"
+          >
+            Go to Workbooks
+          </button>
+
+        </div>
+
+      </div>
     )
   }
 
   /* =====================================================
-     CLOSE WORKBOOK
+     ACTIVE SHEET
   ===================================================== */
 
-  const handleCloseWorkbook = () => {
-    closeWorkbook()
+  const sheetNames =
+    activeWorkbook.sheetOrder?.length
+      ? activeWorkbook.sheetOrder
+      : Object.keys(
+          activeWorkbook.sheets || {},
+        )
 
-    setSelectedDatasetId(null)
-    setPreviewSubTab('insights')
-    setActiveTab('workbooks')
-
-    navigate('/app/workbooks')
-  }
+  const currentSheetName =
+    activeSheetName ||
+    sheetNames[0] ||
+    null
 
   /* =====================================================
-     WORKBOOK DASHBOARD
+     DASHBOARD
   ===================================================== */
 
-  if (
-    activeTab === 'preview' &&
-    activeWorkbook
-  ) {
-    return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
 
-        {/* =================================================
-            HEADER
-        ================================================= */}
+      {/* =================================================
+          HEADER
+      ================================================= */}
 
-        <header className="border-b border-slate-800 bg-slate-900/60 px-6 py-4 flex items-center justify-between">
+      <header className="border-b border-slate-800 bg-slate-900/60 px-6 py-4 flex items-center justify-between">
+
+        <div className="min-w-0">
+
           <h1 className="text-xl font-bold bg-gradient-to-r from-emerald-400 to-teal-200 bg-clip-text text-transparent">
             DataLens AI Dashboard
           </h1>
 
-          <div className="flex gap-2 bg-slate-950 p-1 rounded-lg border border-slate-800 text-sm">
+          <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
 
-            <button
-              onClick={() =>
-                setActiveTab('workbooks')
-              }
-              className="px-4 py-1.5 rounded-md font-medium text-slate-400 hover:text-slate-200 transition-colors"
-            >
-              Workbooks
-            </button>
+            <span className="truncate max-w-[300px]">
+              {activeWorkbook.name}
+            </span>
 
-            <button
-              onClick={() =>
-                setActiveTab('upload')
-              }
-              className="px-4 py-1.5 rounded-md font-medium text-slate-400 hover:text-slate-200 transition-colors"
-            >
-              Upload File
-            </button>
+            <span>
+              •
+            </span>
+
+            <span>
+              {sheetNames.length}{' '}
+              {sheetNames.length === 1
+                ? 'sheet'
+                : 'sheets'}
+            </span>
+
+            <span className="text-emerald-400">
+              • Encrypted
+            </span>
 
           </div>
-        </header>
+
+        </div>
+
+        <div className="flex gap-2 bg-slate-950 p-1 rounded-lg border border-slate-800 text-sm">
+
+          <button
+            type="button"
+            onClick={() =>
+              navigate(
+                '/app/workbooks',
+              )
+            }
+            className="px-4 py-1.5 rounded-md font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
+          >
+            Workbooks
+          </button>
+
+          <button
+            type="button"
+            onClick={() =>
+              navigate(
+                '/app/upload',
+              )
+            }
+            className="px-4 py-1.5 rounded-md font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
+          >
+            Upload File
+          </button>
+
+        </div>
+
+      </header>
+
+      {/* =================================================
+          MAIN
+      ================================================= */}
+
+      <main className="flex-1 p-6 max-w-7xl mx-auto w-full">
 
         {/* =================================================
-            MAIN
+            TOP NAVIGATION
         ================================================= */}
 
-        <main className="flex-1 p-6 max-w-7xl mx-auto w-full">
+        <div className="flex items-center justify-between flex-wrap gap-4">
 
-          {/* =================================================
-              TOP BAR
-          ================================================= */}
+          <button
+            type="button"
+            onClick={() =>
+              navigate(
+                '/app/workbooks',
+              )
+            }
+            className="text-sm text-slate-400 hover:text-emerald-400 flex items-center gap-1 transition-colors"
+          >
+            ← Back to Workbooks
+          </button>
 
-          <div className="flex items-center justify-between flex-wrap gap-4 mb-6">
+          <div className="flex gap-4 items-center flex-wrap">
 
-            <button
-              onClick={
-                handleCloseWorkbook
-              }
-              className="text-sm text-slate-400 hover:text-emerald-400 flex items-center gap-1 transition-colors"
-            >
-              ← Back to Workbooks
-            </button>
+            {/* =================================================
+                DASHBOARD TABS
+            ================================================= */}
 
-            <div className="flex gap-4 items-center flex-wrap">
+            <div className="flex bg-slate-900 p-1 rounded-lg border border-slate-800 text-xs">
 
-              {/* =================================================
-                  PREVIEW TABS
-              ================================================= */}
+              <button
+                type="button"
+                onClick={() =>
+                  setPreviewSubTab(
+                    'insights',
+                  )
+                }
+                className={`px-3 py-1 rounded-md transition-colors ${
+                  previewSubTab ===
+                  'insights'
+                    ? 'bg-emerald-500 text-slate-950 font-bold'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                💡 Insights
+              </button>
 
-              <div className="flex bg-slate-900 p-1 rounded-lg border border-slate-800 text-xs">
+              <button
+                type="button"
+                onClick={() =>
+                  setPreviewSubTab(
+                    'charts',
+                  )
+                }
+                className={`px-3 py-1 rounded-md transition-colors ${
+                  previewSubTab ===
+                  'charts'
+                    ? 'bg-emerald-500 text-slate-950 font-bold'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                📈 Visual Charts
+              </button>
 
-                <button
-                  onClick={() =>
-                    setPreviewSubTab(
-                      'insights',
-                    )
-                  }
-                  className={`px-3 py-1 rounded-md transition-colors ${
-                    previewSubTab ===
-                    'insights'
-                      ? 'bg-emerald-500 text-slate-950 font-bold'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  💡 Insights
-                </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setPreviewSubTab(
+                    'ask',
+                  )
+                }
+                className={`px-3 py-1 rounded-md transition-colors ${
+                  previewSubTab ===
+                  'ask'
+                    ? 'bg-emerald-500 text-slate-950 font-bold'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                🤖 Ask AI
+              </button>
 
-                <button
-                  onClick={() =>
-                    setPreviewSubTab(
-                      'charts',
-                    )
-                  }
-                  className={`px-3 py-1 rounded-md transition-colors ${
-                    previewSubTab ===
-                    'charts'
-                      ? 'bg-emerald-500 text-slate-950 font-bold'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  📈 Visual Charts
-                </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setPreviewSubTab(
+                    'data',
+                  )
+                }
+                className={`px-3 py-1 rounded-md transition-colors ${
+                  previewSubTab ===
+                  'data'
+                    ? 'bg-emerald-500 text-slate-950 font-bold'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                📋 Data Table
+              </button>
 
-                <button
-                  onClick={() =>
-                    setPreviewSubTab(
-                      'ask',
-                    )
-                  }
-                  className={`px-3 py-1 rounded-md transition-colors ${
-                    previewSubTab === 'ask'
-                      ? 'bg-emerald-500 text-slate-950 font-bold'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  🤖 Ask AI
-                </button>
-
-                <button
-                  onClick={() =>
-                    setPreviewSubTab(
-                      'data',
-                    )
-                  }
-                  className={`px-3 py-1 rounded-md transition-colors ${
-                    previewSubTab ===
-                    'data'
-                      ? 'bg-emerald-500 text-slate-950 font-bold'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  📋 Data Table
-                </button>
-
-              </div>
-
-              {/* =================================================
-                  SHEET SELECTOR
-              ================================================= */}
-
-              {datasets.length > 1 && (
-                <div className="flex gap-2 overflow-x-auto">
-
-                  {datasets.map(
-                    (dataset) => (
-                      <button
-                        key={
-                          dataset.id
-                        }
-                        onClick={() =>
-                          setSelectedDatasetId(
-                            dataset.id,
-                          )
-                        }
-                        className={`px-3 py-1 text-xs rounded-lg font-mono border transition-colors ${
-                          selectedDataset?.id ===
-                          dataset.id
-                            ? 'border-emerald-500 bg-emerald-500/10 text-emerald-400 font-bold'
-                            : 'border-slate-800 bg-slate-900 text-slate-400 hover:text-slate-200'
-                        }`}
-                      >
-                        {
-                          dataset.sheet_name
-                        }
-                      </button>
-                    ),
-                  )}
-
-                </div>
-              )}
-
-            </div>
-          </div>
-
-          {/* =================================================
-              WORKBOOK TITLE
-          ================================================= */}
-
-          <div className="mb-6 flex items-center justify-between gap-4">
-
-            <div>
-              <h2 className="text-2xl font-bold text-slate-100">
-                {activeWorkbook.name}
-              </h2>
-
-              <p className="text-sm text-slate-500 mt-1">
-                {datasets.length}{' '}
-                {datasets.length === 1
-                  ? 'sheet'
-                  : 'sheets'}{' '}
-                · Encrypted
-              </p>
             </div>
 
             {/* =================================================
-                CLOSE WORKBOOK
+                SHEETS
             ================================================= */}
 
-            <button
-              type="button"
-              onClick={
-                handleCloseWorkbook
-              }
-              className="px-4 py-2 rounded-lg border border-slate-700 text-slate-400 hover:text-red-400 hover:border-red-400/40 hover:bg-red-400/10 transition-colors"
-            >
-              ✕ Close Workbook
-            </button>
+            {datasets.length >
+              0 && (
+              <div className="flex gap-2 overflow-x-auto max-w-full">
+
+                {datasets.map(
+                  (dataset) => (
+                    <button
+                      key={
+                        dataset.id ||
+                        dataset.sheet_name
+                      }
+                      type="button"
+                      onClick={() => {
+                        setSelectedDatasetId(
+                          dataset.id,
+                        )
+
+                        if (
+                          dataset.sheet_name
+                        ) {
+                          setActiveSheet(
+                            dataset.sheet_name,
+                          )
+                        }
+                      }}
+                      className={`px-3 py-1 text-xs rounded-lg font-mono border transition-colors whitespace-nowrap ${
+                        selectedDataset?.id ===
+                        dataset.id
+                          ? 'border-emerald-500 bg-emerald-500/10 text-emerald-400 font-bold'
+                          : 'border-slate-800 bg-slate-900 text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      {
+                        dataset.sheet_name
+                      }
+                    </button>
+                  ),
+                )}
+
+              </div>
+            )}
 
           </div>
 
-          {/* =================================================
-              DATA CONTENT
-          ================================================= */}
+        </div>
 
-          {loading ? (
-            <div className="flex justify-center items-center py-20">
-              <div className="w-8 h-8 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin" />
-            </div>
-          ) : !selectedDataset ? (
-            <div className="flex justify-center items-center py-20">
-              <div className="text-center">
-                <p className="text-slate-300 font-medium">
-                  No dataset available.
-                </p>
+        {/* =================================================
+            DATA CONTENT
+        ================================================= */}
 
-                <p className="text-slate-500 text-sm mt-1">
-                  This workbook does not
-                  contain readable data.
-                </p>
-              </div>
-            </div>
-          ) : previewSubTab ===
-            'insights' ? (
+        <div className="mt-6">
+
+          {previewSubTab ===
+            'insights' && (
             <InsightsView
               dataset={
                 selectedDataset
               }
             />
-          ) : previewSubTab ===
-            'charts' ? (
+          )}
+
+          {previewSubTab ===
+            'charts' && (
             <ChartCard
               dataset={
                 selectedDataset
               }
             />
-          ) : previewSubTab ===
-            'ask' ? (
+          )}
+
+          {previewSubTab ===
+            'ask' && (
             <AskYourData
               dataset={
                 selectedDataset
               }
             />
-          ) : (
+          )}
+
+          {previewSubTab ===
+            'data' && (
             <DataTable
               dataset={
                 selectedDataset
@@ -375,121 +456,10 @@ export default function DashboardView() {
             />
           )}
 
-        </main>
-      </div>
-    )
-  }
-
-  /* =====================================================
-     WORKBOOK LIST
-  ===================================================== */
-
-  if (
-    activeTab === 'workbooks'
-  ) {
-    return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
-
-        <header className="border-b border-slate-800 bg-slate-900/60 px-6 py-4 flex items-center justify-between">
-
-          <h1 className="text-xl font-bold bg-gradient-to-r from-emerald-400 to-teal-200 bg-clip-text text-transparent">
-            DataLens AI Dashboard
-          </h1>
-
-          <div className="flex gap-2 bg-slate-950 p-1 rounded-lg border border-slate-800 text-sm">
-
-            <button
-              onClick={() =>
-                setActiveTab(
-                  'workbooks',
-                )
-              }
-              className="px-4 py-1.5 rounded-md font-medium bg-emerald-500 text-slate-950"
-            >
-              Workbooks
-            </button>
-
-            <button
-              onClick={() =>
-                setActiveTab(
-                  'upload',
-                )
-              }
-              className="px-4 py-1.5 rounded-md font-medium text-slate-400 hover:text-slate-200"
-            >
-              Upload File
-            </button>
-
-          </div>
-        </header>
-
-        <main className="flex-1 p-6 max-w-7xl mx-auto w-full">
-
-          <WorkbooksView
-            onSelectWorkbook={
-              handleSelectWorkbook
-            }
-            onUploadNew={() =>
-              setActiveTab(
-                'upload',
-              )
-            }
-          />
-
-        </main>
-      </div>
-    )
-  }
-
-  /* =====================================================
-     UPLOAD
-  ===================================================== */
-
-  return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
-
-      <header className="border-b border-slate-800 bg-slate-900/60 px-6 py-4 flex items-center justify-between">
-
-        <h1 className="text-xl font-bold bg-gradient-to-r from-emerald-400 to-teal-200 bg-clip-text text-transparent">
-          DataLens AI Dashboard
-        </h1>
-
-        <div className="flex gap-2 bg-slate-950 p-1 rounded-lg border border-slate-800 text-sm">
-
-          <button
-            onClick={() =>
-              setActiveTab(
-                'workbooks',
-              )
-            }
-            className="px-4 py-1.5 rounded-md font-medium text-slate-400 hover:text-slate-200"
-          >
-            Workbooks
-          </button>
-
-          <button
-            onClick={() =>
-              setActiveTab(
-                'upload',
-              )
-            }
-            className="px-4 py-1.5 rounded-md font-medium bg-emerald-500 text-slate-950"
-          >
-            Upload File
-          </button>
-
         </div>
-      </header>
-
-      <main className="flex-1 p-6 max-w-7xl mx-auto w-full">
-
-        <UploadView
-          onUploadSuccess={
-            handleUploadSuccess
-          }
-        />
 
       </main>
+
     </div>
   )
 }
