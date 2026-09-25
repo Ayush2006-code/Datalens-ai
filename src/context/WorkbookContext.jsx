@@ -27,7 +27,8 @@ import { profileSheet } from '../services/dataProfiler.js'
 import { buildDemoWorkbook } from '../services/demoData.js'
 import { emptyFilters } from '../services/filterEngine.js'
 
-const WorkbookContext = createContext(null)
+const WorkbookContext =
+  createContext(null)
 
 const PROCESSING_STEPS = [
   'Reading workbook',
@@ -40,25 +41,62 @@ const PROCESSING_STEPS = [
   'Finding insights',
 ]
 
-function buildSheetsFromDatasets(datasets) {
+function buildSheetsFromDatasets(
+  datasets,
+) {
   const sheets = {}
 
-  for (const dataset of datasets || []) {
-    const headers = Array.isArray(dataset.headers)
-      ? dataset.headers
-      : []
+  for (
+    const dataset of
+    datasets || []
+  ) {
+    const headers =
+      Array.isArray(
+        dataset.headers,
+      )
+        ? dataset.headers
+        : []
 
-    const rows = Array.isArray(dataset.rows)
-      ? dataset.rows
-      : []
+    const rows =
+      Array.isArray(
+        dataset.rows,
+      )
+        ? dataset.rows
+        : []
 
     if (!dataset.sheet_name) {
       continue
     }
 
-    sheets[dataset.sheet_name] = {
+    sheets[
+      dataset.sheet_name
+    ] = {
       columns: headers,
       rows,
+    }
+  }
+
+  return sheets
+}
+
+function buildSheetsFromParsed(
+  parsed,
+) {
+  const sheets = {}
+
+  for (
+    const [
+      name,
+      sheet,
+    ] of Object.entries(
+      parsed.sheets || {},
+    )
+  ) {
+    sheets[name] = {
+      columns:
+        sheet.columns,
+      rows:
+        sheet.rows,
     }
   }
 
@@ -76,22 +114,46 @@ function buildWorkbookFromSupabase(
 
   return {
     id: workbook.id,
-    ownerId: workbook.user_id,
-    name: workbook.name,
-    filePath: workbook.file_path,
-    fileSize: workbook.file_size,
-    createdAt: workbook.created_at,
-    updatedAt: workbook.created_at,
-    sourceType: 'upload',
+
+    ownerId:
+      workbook.user_id,
+
+    name:
+      workbook.name,
+
+    filePath:
+      workbook.file_path,
+
+    fileSize:
+      workbook.file_size,
+
+    createdAt:
+      workbook.created_at,
+
+    updatedAt:
+      workbook.created_at,
+
+    sourceType:
+      'upload',
+
     sheets,
-    sheetOrder: Object.keys(sheets),
+
+    sheetOrder:
+      Object.keys(sheets),
+
     datasets,
+
     dashboardConfig: {},
+
     versions: [
       {
         version: 1,
-        savedAt: workbook.created_at,
-        note: 'Uploaded workbook',
+
+        savedAt:
+          workbook.created_at,
+
+        note:
+          'Uploaded workbook',
       },
     ],
   }
@@ -102,14 +164,17 @@ function buildWorkbookFromParsed(
   id = null,
 ) {
   const sheets =
-    buildSheetsFromParsed(parsed)
+    buildSheetsFromParsed(
+      parsed,
+    )
 
   return {
     id:
       id ||
       `local_${Date.now()}`,
 
-    ownerId: 'local',
+    ownerId:
+      'local',
 
     name:
       parsed.fileName.replace(
@@ -123,7 +188,8 @@ function buildWorkbookFromParsed(
     updatedAt:
       new Date().toISOString(),
 
-    sourceType: 'demo',
+    sourceType:
+      'demo',
 
     sheets,
 
@@ -135,29 +201,15 @@ function buildWorkbookFromParsed(
     versions: [
       {
         version: 1,
+
         savedAt:
           new Date().toISOString(),
-        note: 'Demo workbook',
+
+        note:
+          'Demo workbook',
       },
     ],
   }
-}
-
-function buildSheetsFromParsed(parsed) {
-  const sheets = {}
-
-  for (
-    const [name, sheet] of Object.entries(
-      parsed.sheets || {},
-    )
-  ) {
-    sheets[name] = {
-      columns: sheet.columns,
-      rows: sheet.rows,
-    }
-  }
-
-  return sheets
 }
 
 /* =========================================================
@@ -174,54 +226,50 @@ async function decryptSupabaseDatasets(
     )
   }
 
-  const decryptedDatasets =
-    await Promise.all(
-      (datasets || []).map(
-        async (dataset) => {
-          /*
-           * New encrypted dataset.
-           */
-          if (
-            dataset.encrypted_payload
-          ) {
-            const payload =
-              await decryptJSON(
-                dataset.encrypted_payload,
-                encryptionKey,
-              )
+  return Promise.all(
+    (datasets || []).map(
+      async (
+        dataset,
+      ) => {
+        /*
+         * New encrypted dataset.
+         */
+        if (
+          dataset.encrypted_payload
+        ) {
+          const payload =
+            await decryptJSON(
+              dataset.encrypted_payload,
+              encryptionKey,
+            )
 
-            return {
-              ...dataset,
+          return {
+            ...dataset,
 
-              sheet_name:
-                payload.sheet_name,
+            sheet_name:
+              payload.sheet_name,
 
-              headers:
-                payload.headers,
+            headers:
+              payload.headers,
 
-              rows:
-                payload.rows,
+            rows:
+              payload.rows,
 
-              row_count:
-                payload.row_count,
-            }
+            row_count:
+              payload.row_count,
           }
+        }
 
-          /*
-           * Old plaintext dataset.
-           *
-           * This fallback is intentionally kept so
-           * existing test records don't crash the app.
-           *
-           * IMPORTANT:
-           * Old records are NOT encrypted.
-           */
-          return dataset
-        },
-      ),
-    )
-
-  return decryptedDatasets
+        /*
+         * Legacy plaintext record.
+         *
+         * Kept temporarily only so old test
+         * records do not crash the application.
+         */
+        return dataset
+      },
+    ),
+  )
 }
 
 /* =========================================================
@@ -270,7 +318,8 @@ export function WorkbookProvider({
   })
 
   const ownerId =
-    session?.userId || null
+    session?.userId ||
+    null
 
   /* =====================================================
      REFRESH WORKBOOKS
@@ -284,9 +333,23 @@ export function WorkbookProvider({
           return []
         }
 
+        /*
+         * Do not query/decrypt encrypted workbook
+         * metadata until the user's DEK is ready.
+         */
+        if (
+          !encryptionReady ||
+          !encryptionKey
+        ) {
+          setWorkbooks([])
+          return []
+        }
+
         try {
           const data =
-            await getUserWorkbooks()
+            await getUserWorkbooks(
+              encryptionKey,
+            )
 
           const normalized =
             (data || []).map(
@@ -331,22 +394,32 @@ export function WorkbookProvider({
       },
       [
         ownerId,
+        encryptionKey,
+        encryptionReady,
         notify,
       ],
     )
 
   /* =====================================================
-     RESET WHEN USER CHANGES
+     RESET WHEN USER / ENCRYPTION STATE CHANGES
   ===================================================== */
 
   useEffect(() => {
     refreshWorkbooks()
 
-    setActiveWorkbookId(null)
-    setActiveSheetName(null)
+    setActiveWorkbookId(
+      null,
+    )
+
+    setActiveSheetName(
+      null,
+    )
+
     setFiltersBySheet({})
   }, [
     ownerId,
+    encryptionReady,
+    encryptionKey,
     refreshWorkbooks,
   ])
 
@@ -356,7 +429,9 @@ export function WorkbookProvider({
 
   const runProcessingAnimation =
     useCallback(
-      async (label) => {
+      async (
+        label,
+      ) => {
         setProcessing({
           active: true,
 
@@ -377,7 +452,6 @@ export function WorkbookProvider({
           PROCESSING_STEPS.length;
           i++
         ) {
-          // eslint-disable-next-line no-await-in-loop
           await new Promise(
             (resolve) =>
               setTimeout(
@@ -454,9 +528,14 @@ export function WorkbookProvider({
 
   const openSupabaseWorkbook =
     useCallback(
-      async (workbookId) => {
+      async (
+        workbookId,
+      ) => {
         try {
-          if (!encryptionReady) {
+          if (
+            !encryptionReady ||
+            !encryptionKey
+          ) {
             notify(
               'Your encrypted data is locked. Please login again to unlock it.',
               'error',
@@ -465,19 +544,13 @@ export function WorkbookProvider({
             return null
           }
 
-          if (!encryptionKey) {
-            notify(
-              'Encryption key is unavailable. Please login again.',
-              'error',
+          const workbooksFromServer =
+            await getUserWorkbooks(
+              encryptionKey,
             )
 
-            return null
-          }
-
           const workbook =
-            (
-              await getUserWorkbooks()
-            ).find(
+            workbooksFromServer.find(
               (item) =>
                 item.id ===
                 workbookId,
@@ -497,9 +570,6 @@ export function WorkbookProvider({
               workbookId,
             )
 
-          /*
-           * Decrypt datasets ONLY in browser.
-           */
           const datasets =
             await decryptSupabaseDatasets(
               encryptedDatasets,
@@ -572,7 +642,9 @@ export function WorkbookProvider({
 
   const uploadFile =
     useCallback(
-      async (file) => {
+      async (
+        file,
+      ) => {
         try {
           if (!ownerId) {
             notify(
@@ -583,7 +655,9 @@ export function WorkbookProvider({
             return null
           }
 
-          if (!encryptionReady) {
+          if (
+            !encryptionReady
+          ) {
             notify(
               'Encryption is locked. Please login again before uploading.',
               'error',
@@ -605,22 +679,15 @@ export function WorkbookProvider({
             `Analyzing ${file.name}`,
           )
 
-          /*
-           * IMPORTANT:
-           *
-           * Encryption key is passed directly from
-           * AuthContext to the upload service.
-           *
-           * The service encrypts the workbook BEFORE
-           * uploading it to Supabase.
-           */
           const result =
             await uploadAndParseWorkbook(
               file,
               encryptionKey,
             )
 
-          if (!result?.success) {
+          if (
+            !result?.success
+          ) {
             notify(
               result?.error ||
                 'Failed to upload and parse workbook.',
@@ -635,9 +702,6 @@ export function WorkbookProvider({
 
           await refreshWorkbooks()
 
-          /*
-           * Open using decrypted dataset.
-           */
           const workbook =
             await openSupabaseWorkbook(
               workbookId,
@@ -707,6 +771,7 @@ export function WorkbookProvider({
                 item.id !==
                 workbook.id,
             ),
+
             workbook,
           ],
         )
@@ -734,12 +799,16 @@ export function WorkbookProvider({
 
   const openWorkbook =
     useCallback(
-      async (id) => {
+      async (
+        id,
+      ) => {
         return openSupabaseWorkbook(
           id,
         )
       },
-      [openSupabaseWorkbook],
+      [
+        openSupabaseWorkbook,
+      ],
     )
 
   /* =====================================================
@@ -748,8 +817,14 @@ export function WorkbookProvider({
 
   const closeWorkbook =
     useCallback(() => {
-      setActiveWorkbookId(null)
-      setActiveSheetName(null)
+      setActiveWorkbookId(
+        null,
+      )
+
+      setActiveSheetName(
+        null,
+      )
+
       setFiltersBySheet({})
     }, [])
 
@@ -759,7 +834,9 @@ export function WorkbookProvider({
 
   const deleteWorkbookById =
     useCallback(
-      async (id) => {
+      async (
+        id,
+      ) => {
         notify(
           'Workbook deletion is currently managed from the Supabase workbook service.',
           'info',
@@ -864,7 +941,8 @@ export function WorkbookProvider({
 
               {
                 version:
-                  (existing.versions
+                  (existing
+                    .versions
                     ?.length ||
                     0) + 1,
 
@@ -881,7 +959,8 @@ export function WorkbookProvider({
             (current) =>
               current.map(
                 (workbook) =>
-                  workbook.id === id
+                  workbook.id ===
+                  id
                     ? updated
                     : workbook,
               ),
@@ -956,7 +1035,9 @@ export function WorkbookProvider({
           sheetName
         ] ||
         emptyFilters(),
-      [filtersBySheet],
+      [
+        filtersBySheet,
+      ],
     )
 
   const updateFiltersForSheet =
@@ -1005,14 +1086,18 @@ export function WorkbookProvider({
   const toggleChartVisibility =
     useCallback(
       (chartId) => {
-        if (!activeWorkbookId) {
+        if (
+          !activeWorkbookId
+        ) {
           return
         }
 
         setWorkbooks(
           (current) =>
             current.map(
-              (workbook) => {
+              (
+                workbook,
+              ) => {
                 if (
                   workbook.id !==
                   activeWorkbookId
@@ -1059,7 +1144,9 @@ export function WorkbookProvider({
             ),
         )
       },
-      [activeWorkbookId],
+      [
+        activeWorkbookId,
+      ],
     )
 
   /* =====================================================
@@ -1067,35 +1154,42 @@ export function WorkbookProvider({
   ===================================================== */
 
   const resetDashboardConfig =
-    useCallback(() => {
-      if (!activeWorkbookId) {
-        return
-      }
+    useCallback(
+      () => {
+        if (
+          !activeWorkbookId
+        ) {
+          return
+        }
 
-      setWorkbooks(
-        (current) =>
-          current.map(
-            (workbook) =>
-              workbook.id ===
-              activeWorkbookId
-                ? {
-                    ...workbook,
+        setWorkbooks(
+          (current) =>
+            current.map(
+              (
+                workbook,
+              ) =>
+                workbook.id ===
+                activeWorkbookId
+                  ? {
+                      ...workbook,
 
-                    dashboardConfig:
-                      {},
-                  }
-                : workbook,
-          ),
-      )
+                      dashboardConfig:
+                        {},
+                    }
+                  : workbook,
+            ),
+        )
 
-      notify(
-        'Dashboard reset to the auto-generated layout.',
-        'success',
-      )
-    }, [
-      activeWorkbookId,
-      notify,
-    ])
+        notify(
+          'Dashboard reset to the auto-generated layout.',
+          'success',
+        )
+      },
+      [
+        activeWorkbookId,
+        notify,
+      ],
+    )
 
   /* =====================================================
      ACTIVE WORKBOOK
@@ -1151,92 +1245,91 @@ export function WorkbookProvider({
       return profileSheet(
         activeSheet,
       )
-    }, [activeSheet])
+    }, [
+      activeSheet,
+    ])
 
   /* =====================================================
      CONTEXT VALUE
   ===================================================== */
 
-  const value = useMemo(
-    () => ({
-      workbooks,
+  const value =
+    useMemo(
+      () => ({
+        workbooks,
 
-      activeWorkbook,
+        activeWorkbook,
 
-      activeSheetName,
+        activeSheetName,
 
-      activeSheet,
+        activeSheet,
 
-      activeSheetProfile,
+        activeSheetProfile,
 
-      processing,
+        processing,
 
-      filters:
-        activeSheetName
-          ? getFiltersForSheet(
-              activeSheetName,
-            )
-          : emptyFilters(),
+        filters:
+          activeSheetName
+            ? getFiltersForSheet(
+                activeSheetName,
+              )
+            : emptyFilters(),
 
-      uploadFile,
+        uploadFile,
 
-      loadDemoWorkbook,
+        loadDemoWorkbook,
 
-      openWorkbook,
+        openWorkbook,
 
-      closeWorkbook,
+        closeWorkbook,
 
-      deleteWorkbookById,
+        deleteWorkbookById,
 
-      toggleFavorite,
+        toggleFavorite,
 
-      renameWorkbookById,
+        renameWorkbookById,
 
-      updateWorkbookWithFile,
+        updateWorkbookWithFile,
 
-      setActiveSheet,
+        setActiveSheet,
 
-      updateFiltersForSheet,
+        updateFiltersForSheet,
 
-      clearFiltersForSheet,
+        clearFiltersForSheet,
 
-      toggleChartVisibility,
+        toggleChartVisibility,
 
-      resetDashboardConfig,
+        resetDashboardConfig,
 
-      refreshWorkbooks,
+        refreshWorkbooks,
 
-      /*
-       * Expose encryption status so UI can
-       * later show Locked / Unlocked state.
-       */
-      encryptionReady,
-    }),
-    [
-      workbooks,
-      activeWorkbook,
-      activeSheetName,
-      activeSheet,
-      activeSheetProfile,
-      processing,
-      getFiltersForSheet,
-      uploadFile,
-      loadDemoWorkbook,
-      openWorkbook,
-      closeWorkbook,
-      deleteWorkbookById,
-      toggleFavorite,
-      renameWorkbookById,
-      updateWorkbookWithFile,
-      setActiveSheet,
-      updateFiltersForSheet,
-      clearFiltersForSheet,
-      toggleChartVisibility,
-      resetDashboardConfig,
-      refreshWorkbooks,
-      encryptionReady,
-    ],
-  )
+        encryptionReady,
+      }),
+      [
+        workbooks,
+        activeWorkbook,
+        activeSheetName,
+        activeSheet,
+        activeSheetProfile,
+        processing,
+        getFiltersForSheet,
+        uploadFile,
+        loadDemoWorkbook,
+        openWorkbook,
+        closeWorkbook,
+        deleteWorkbookById,
+        toggleFavorite,
+        renameWorkbookById,
+        updateWorkbookWithFile,
+        setActiveSheet,
+        updateFiltersForSheet,
+        clearFiltersForSheet,
+        toggleChartVisibility,
+        resetDashboardConfig,
+        refreshWorkbooks,
+        encryptionReady,
+      ],
+    )
 
   return (
     <WorkbookContext.Provider

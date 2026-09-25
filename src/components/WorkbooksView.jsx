@@ -1,17 +1,26 @@
 import React, {
+  useCallback,
   useEffect,
   useState,
 } from 'react'
 
+import { useAuth } from '../context/AuthContext.jsx'
+
 import {
   getUserWorkbooks,
   deleteWorkbook,
-} from '../services/workbookService'
+} from '../services/workbookService.js'
 
 export default function WorkbooksView({
   onSelectWorkbook,
   onUploadNew,
 }) {
+  const {
+    session,
+    encryptionKey,
+    encryptionReady,
+  } = useAuth()
+
   const [
     workbooks,
     setWorkbooks,
@@ -31,31 +40,55 @@ export default function WorkbooksView({
      LOAD WORKBOOKS
   ===================================================== */
 
-  const loadWorkbooks = async () => {
-    setLoading(true)
+  const loadWorkbooks = useCallback(
+    async () => {
+      if (!session?.userId) {
+        setWorkbooks([])
+        setLoading(false)
+        return
+      }
 
-    try {
-      const data =
-        await getUserWorkbooks()
+      /*
+       * Encrypted workbooks can only be read
+       * after the user's encryption key is ready.
+       */
+      if (!encryptionReady || !encryptionKey) {
+        setLoading(true)
+        return
+      }
 
-      setWorkbooks(
-        data || [],
-      )
-    } catch (error) {
-      console.error(
-        'Failed to load workbooks:',
-        error,
-      )
+      setLoading(true)
 
-      setWorkbooks([])
-    } finally {
-      setLoading(false)
-    }
-  }
+      try {
+        const data =
+          await getUserWorkbooks(
+            encryptionKey,
+          )
+
+        setWorkbooks(
+          data || [],
+        )
+      } catch (error) {
+        console.error(
+          'Failed to load workbooks:',
+          error,
+        )
+
+        setWorkbooks([])
+      } finally {
+        setLoading(false)
+      }
+    },
+    [
+      session?.userId,
+      encryptionReady,
+      encryptionKey,
+    ],
+  )
 
   useEffect(() => {
     loadWorkbooks()
-  }, [])
+  }, [loadWorkbooks])
 
   /* =====================================================
      OPEN WORKBOOK
@@ -72,9 +105,7 @@ export default function WorkbooksView({
       return
     }
 
-    if (
-      onSelectWorkbook
-    ) {
+    if (onSelectWorkbook) {
       onSelectWorkbook(
         workbookId,
       )
@@ -231,7 +262,6 @@ export default function WorkbooksView({
         >
           + Upload New
         </button>
-
       </div>
 
       {/* =================================================
@@ -240,11 +270,9 @@ export default function WorkbooksView({
 
       {loading && (
         <div className="flex items-center justify-center py-16">
-
           <div className="text-sm text-gray-500 dark:text-gray-400">
             Loading workbooks...
           </div>
-
         </div>
       )}
 
@@ -253,8 +281,7 @@ export default function WorkbooksView({
       ================================================= */}
 
       {!loading &&
-        workbooks.length ===
-          0 && (
+        workbooks.length === 0 && (
           <div className="rounded-xl border border-dashed border-gray-300 bg-white p-10 text-center dark:border-gray-700 dark:bg-gray-900">
 
             <div className="mb-3 text-5xl">
@@ -288,8 +315,7 @@ export default function WorkbooksView({
       ================================================= */}
 
       {!loading &&
-        workbooks.length >
-          0 && (
+        workbooks.length > 0 && (
           <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3">
 
             {workbooks.map(
@@ -347,9 +373,7 @@ export default function WorkbooksView({
                     ================================================= */}
 
                     <h3 className="truncate pr-10 text-base font-semibold text-gray-900 dark:text-white">
-                      {
-                        wb.name
-                      }
+                      {wb.name}
                     </h3>
 
                     {/* =================================================

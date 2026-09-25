@@ -1,58 +1,175 @@
-import React, { useState } from 'react';
-import { uploadAndParseWorkbook } from '../services/workbookService';
+import React, { useState } from 'react'
 
-export default function UploadView({ onUploadSuccess }) {
-  const [loading, setLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState('');
+import { useWorkbook } from '../context/WorkbookContext.jsx'
 
-  const processFile = async (file) => {
-    if (!file) return;
+export default function UploadView({
+  onUploadSuccess,
+}) {
+  const {
+    uploadFile,
+    encryptionReady,
+  } = useWorkbook()
 
-    // File validation
+  const [loading, setLoading] =
+    useState(false)
+
+  const [errorMsg, setErrorMsg] =
+    useState('')
+
+  const processFile = async (
+    file,
+  ) => {
+    if (!file) {
+      return
+    }
+
+    /* =====================================================
+       FILE VALIDATION
+    ===================================================== */
+
     const validTypes = [
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'application/vnd.ms-excel',
       'text/csv',
-    ];
-    
-    if (!validTypes.includes(file.type) && !file.name.match(/\.(xlsx|xls|csv)$/i)) {
-      setErrorMsg('Please upload a valid Excel (.xlsx, .xls) or CSV file.');
-      return;
+      'application/csv',
+    ]
+
+    const validExtension =
+      /\.(xlsx|xls|csv)$/i.test(
+        file.name,
+      )
+
+    if (
+      !validTypes.includes(
+        file.type,
+      ) &&
+      !validExtension
+    ) {
+      setErrorMsg(
+        'Please upload a valid Excel (.xlsx, .xls) or CSV file.',
+      )
+
+      return
     }
 
-    setLoading(true);
-    setErrorMsg('');
+    /* =====================================================
+       ENCRYPTION CHECK
+    ===================================================== */
 
-    const result = await uploadAndParseWorkbook(file);
+    if (!encryptionReady) {
+      setErrorMsg(
+        'Encryption is locked. Please login again before uploading.',
+      )
 
-    setLoading(false);
+      return
+    }
 
-    if (result.success) {
-      if (onUploadSuccess) {
-        onUploadSuccess(result.workbookId);
-      } else {
-        alert('Workbook uploaded and parsed successfully!');
+    setLoading(true)
+    setErrorMsg('')
+
+    try {
+      /*
+       * IMPORTANT:
+       *
+       * Do NOT call uploadAndParseWorkbook()
+       * directly from this component.
+       *
+       * WorkbookContext owns the encryption flow
+       * and passes the user's encryption key
+       * securely to the upload service.
+       */
+      const workbook =
+        await uploadFile(file)
+
+      if (!workbook) {
+        setErrorMsg(
+          'Could not upload the workbook. Please try again.',
+        )
+
+        return
       }
-    } else {
-      setErrorMsg(result.error || 'Failed to upload and parse workbook.');
+
+      /*
+       * WorkbookContext already:
+       *
+       * 1. Checks authentication
+       * 2. Checks encryption key
+       * 3. Encrypts workbook
+       * 4. Uploads encrypted data
+       * 5. Saves encrypted datasets
+       * 6. Decrypts the dashboard in browser
+       * 7. Opens the workbook
+       */
+
+      if (
+        onUploadSuccess
+      ) {
+        onUploadSuccess(
+          workbook.id,
+        )
+      }
+    } catch (error) {
+      console.error(
+        'Upload view error:',
+        error,
+      )
+
+      setErrorMsg(
+        error?.message ||
+          'Failed to upload and analyze the workbook.',
+      )
+    } finally {
+      setLoading(false)
     }
-  };
+  }
 
-  const handleFileChange = (e) => {
-    const file = e.target.files[0];
-    processFile(file);
-  };
+  /* =====================================================
+     FILE INPUT
+  ===================================================== */
 
-  const handleDrop = (e) => {
-    e.preventDefault();
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      processFile(e.dataTransfer.files[0]);
+  const handleFileChange = (
+    event,
+  ) => {
+    const file =
+      event.target.files?.[0]
+
+    processFile(file)
+
+    /*
+     * Allow selecting the same file again
+     * after an error.
+     */
+    event.target.value = ''
+  }
+
+  /* =====================================================
+     DRAG & DROP
+  ===================================================== */
+
+  const handleDrop = (
+    event,
+  ) => {
+    event.preventDefault()
+
+    if (loading) {
+      return
     }
-  };
 
-  const handleDragOver = (e) => {
-    e.preventDefault();
-  };
+    const file =
+      event.dataTransfer.files?.[0]
+
+    processFile(file)
+  }
+
+  const handleDragOver = (
+    event,
+  ) => {
+    event.preventDefault()
+  }
+
+  /* =====================================================
+     UI
+  ===================================================== */
 
   return (
     <div className="flex flex-col items-center justify-center p-8 min-h-[400px]">
@@ -64,29 +181,52 @@ export default function UploadView({ onUploadSuccess }) {
         <input
           type="file"
           id="fileInput"
-          accept=".xlsx, .xls, .csv"
-          onChange={handleFileChange}
+          accept=".xlsx,.xls,.csv"
+          onChange={
+            handleFileChange
+          }
           className="hidden"
           disabled={loading}
         />
 
-        <label htmlFor="fileInput" className="cursor-pointer flex flex-col items-center w-full">
+        <label
+          htmlFor="fileInput"
+          className="cursor-pointer flex flex-col items-center w-full"
+        >
           {loading ? (
             <div className="flex flex-col items-center gap-3">
-              <div className="w-10 h-10 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
-              <p className="text-slate-300 font-medium">Uploading and parsing spreadsheet...</p>
+              <div className="w-10 h-10 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+
+              <p className="text-slate-300 font-medium">
+                Encrypting and
+                analyzing
+                spreadsheet...
+              </p>
+
+              <p className="text-xs text-slate-500">
+                Your workbook is
+                encrypted before
+                being uploaded.
+              </p>
             </div>
           ) : (
             <>
               <div className="w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center mb-4 text-emerald-400 text-2xl">
                 📊
               </div>
+
               <h3 className="text-lg font-semibold text-slate-100 mb-1">
-                Upload your workbook
+                Upload your
+                workbook
               </h3>
+
               <p className="text-sm text-slate-400 mb-4">
-                Drag and drop your Excel (.xlsx, .xls) or CSV file here, or click to browse
+                Drag and drop your
+                Excel (.xlsx, .xls)
+                or CSV file here, or
+                click to browse
               </p>
+
               <span className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-semibold rounded-lg text-sm transition-colors">
                 Browse File
               </span>
@@ -101,5 +241,5 @@ export default function UploadView({ onUploadSuccess }) {
         </div>
       )}
     </div>
-  );
+  )
 }

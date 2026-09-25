@@ -4,6 +4,7 @@ import * as XLSX from 'xlsx'
 import {
   encryptBytes,
   encryptJSON,
+  decryptJSON,
 } from './crypto.js'
 
 /* =========================================================
@@ -44,7 +45,8 @@ export const uploadAndParseWorkbook = async (
       )
     }
 
-    const user = await getCurrentUser()
+    const user =
+      await getCurrentUser()
 
     if (!user) {
       throw new Error(
@@ -52,17 +54,12 @@ export const uploadAndParseWorkbook = async (
       )
     }
 
-    const timestamp = Date.now()
+    const timestamp =
+      Date.now()
 
     /*
-     * IMPORTANT:
-     *
-     * Do NOT use the original filename in the
-     * Storage path.
-     *
-     * Storage path contains only random-looking
-     * identifiers so the original filename is
-     * not exposed through the path.
+     * Original filename is NEVER used
+     * in the Storage path.
      */
     const storageFileName =
       `${crypto.randomUUID()}.bin`
@@ -70,23 +67,24 @@ export const uploadAndParseWorkbook = async (
     const filePath =
       `${user.id}/${storageFileName}`
 
-    // --------------------------------------------------
-    // 1. Read workbook locally
-    // --------------------------------------------------
+    /* =======================================================
+       1. READ FILE LOCALLY
+    ======================================================= */
 
     const arrayBuffer =
       await file.arrayBuffer()
 
-    // --------------------------------------------------
-    // 2. Parse workbook locally
-    // --------------------------------------------------
+    /* =======================================================
+       2. PARSE WORKBOOK LOCALLY
+    ======================================================= */
 
-    const workbookData = XLSX.read(
-      arrayBuffer,
-      {
-        type: 'array',
-      }
-    )
+    const workbookData =
+      XLSX.read(
+        arrayBuffer,
+        {
+          type: 'array',
+        }
+      )
 
     const parsedDatasets = []
 
@@ -95,7 +93,9 @@ export const uploadAndParseWorkbook = async (
       workbookData.SheetNames
     ) {
       const sheet =
-        workbookData.Sheets[sheetName]
+        workbookData.Sheets[
+          sheetName
+        ]
 
       const jsonData =
         XLSX.utils.sheet_to_json(
@@ -112,7 +112,10 @@ export const uploadAndParseWorkbook = async (
 
       const headers =
         (jsonData[0] || []).map(
-          (header, index) => {
+          (
+            header,
+            index
+          ) => {
             const value =
               String(
                 header ?? ''
@@ -128,57 +131,64 @@ export const uploadAndParseWorkbook = async (
       const rows =
         jsonData
           .slice(1)
-          .map((row) => {
-            const rowObject = {}
+          .map(
+            (row) => {
+              const rowObject =
+                {}
 
-            headers.forEach(
-              (header, index) => {
-                rowObject[header] =
-                  row[index] !==
-                  undefined
-                    ? row[index]
-                    : null
-              }
-            )
+              headers.forEach(
+                (
+                  header,
+                  index
+                ) => {
+                  rowObject[
+                    header
+                  ] =
+                    row[index] !==
+                    undefined
+                      ? row[index]
+                      : null
+                }
+              )
 
-            return rowObject
-          })
+              return rowObject
+            }
+          )
 
       parsedDatasets.push({
-        sheet_name: sheetName,
+        sheet_name:
+          sheetName,
+
         headers,
+
         rows,
-        row_count: rows.length,
+
+        row_count:
+          rows.length,
       })
     }
 
     if (
-      parsedDatasets.length === 0
+      parsedDatasets.length ===
+      0
     ) {
       throw new Error(
         'The selected workbook does not contain any readable data.'
       )
     }
 
-    // --------------------------------------------------
-    // 3. Encrypt original workbook
-    // --------------------------------------------------
+    /* =======================================================
+       3. ENCRYPT ORIGINAL XLSX
+    ======================================================= */
 
-    /*
-     * The original XLSX bytes are encrypted
-     * BEFORE they leave the browser.
-     */
     const encryptedWorkbook =
       await encryptBytes(
-        new Uint8Array(arrayBuffer),
+        new Uint8Array(
+          arrayBuffer
+        ),
         encryptionKey
       )
 
-    /*
-     * Convert encrypted payload to Blob.
-     *
-     * Storage receives only encrypted bytes.
-     */
     const encryptedWorkbookBytes =
       new TextEncoder().encode(
         JSON.stringify(
@@ -188,30 +198,25 @@ export const uploadAndParseWorkbook = async (
 
     const encryptedWorkbookBlob =
       new Blob(
-        [encryptedWorkbookBytes],
+        [
+          encryptedWorkbookBytes,
+        ],
         {
           type:
             'application/octet-stream',
         }
       )
 
-    // --------------------------------------------------
-    // 4. Encrypt parsed datasets
-    // --------------------------------------------------
+    /* =======================================================
+       4. ENCRYPT DATASETS
+    ======================================================= */
 
-    /*
-     * Every sheet's complete data is encrypted.
-     *
-     * Supabase will NOT receive:
-     * - sheet names
-     * - headers
-     * - rows
-     * - actual dataset values
-     */
     const encryptedDatasets =
       await Promise.all(
         parsedDatasets.map(
-          async (dataset) => {
+          async (
+            dataset
+          ) => {
             const encryptedPayload =
               await encryptJSON(
                 {
@@ -238,23 +243,46 @@ export const uploadAndParseWorkbook = async (
         )
       )
 
-    // --------------------------------------------------
-    // 5. Upload encrypted workbook
-    // --------------------------------------------------
+    /* =======================================================
+       5. ENCRYPT WORKBOOK METADATA
+    ======================================================= */
+
+    const encryptedMetadata =
+      await encryptJSON(
+        {
+          name:
+            file.name,
+
+          type:
+            file.type ||
+            'application/octet-stream',
+
+          originalSize:
+            file.size,
+        },
+        encryptionKey
+      )
+
+    /* =======================================================
+       6. UPLOAD ENCRYPTED FILE
+    ======================================================= */
 
     const {
-      error: storageError,
-    } = await supabase.storage
-      .from('workbooks')
-      .upload(
-        filePath,
-        encryptedWorkbookBlob,
-        {
-          upsert: false,
-          contentType:
-            'application/octet-stream',
-        }
-      )
+      error:
+        storageError,
+    } =
+      await supabase.storage
+        .from('workbooks')
+        .upload(
+          filePath,
+          encryptedWorkbookBlob,
+          {
+            upsert: false,
+
+            contentType:
+              'application/octet-stream',
+          }
+        )
 
     if (storageError) {
       throw new Error(
@@ -262,64 +290,37 @@ export const uploadAndParseWorkbook = async (
       )
     }
 
-    // --------------------------------------------------
-    // 6. Create workbook database record
-    // --------------------------------------------------
-
-    /*
-     * IMPORTANT:
-     *
-     * We do not store the original filename.
-     *
-     * `name` is encrypted.
-     *
-     * `file_path` is random-looking.
-     *
-     * file_size is only the encrypted object's
-     * approximate size metadata.
-     */
-    const encryptedName =
-      await encryptJSON(
-        {
-          name: file.name,
-          type:
-            file.type ||
-            'application/octet-stream',
-          originalSize:
-            file.size,
-        },
-        encryptionKey
-      )
+    /* =======================================================
+       7. SAVE ENCRYPTED WORKBOOK METADATA
+    ======================================================= */
 
     const {
-      data: workbookRecord,
-      error: workbookError,
-    } = await supabase
-      .from('workbooks')
-      .insert({
-        user_id: user.id,
+      data:
+        workbookRecord,
+      error:
+        workbookError,
+    } =
+      await supabase
+        .from('workbooks')
+        .insert({
+          user_id:
+            user.id,
 
-        /*
-         * Encrypted filename metadata.
-         */
-        name:
-          JSON.stringify(
-            encryptedName
-          ),
+          name:
+            JSON.stringify(
+              encryptedMetadata
+            ),
 
-        file_path:
-          filePath,
+          file_path:
+            filePath,
 
-        file_size:
-          encryptedWorkbookBlob.size,
-      })
-      .select('id')
-      .single()
+          file_size:
+            encryptedWorkbookBlob.size,
+        })
+        .select('id')
+        .single()
 
     if (workbookError) {
-      /*
-       * Roll back encrypted Storage object.
-       */
       await supabase.storage
         .from('workbooks')
         .remove([
@@ -334,26 +335,21 @@ export const uploadAndParseWorkbook = async (
     const workbookId =
       workbookRecord.id
 
-    // --------------------------------------------------
-    // 7. Save encrypted datasets
-    // --------------------------------------------------
+    /* =======================================================
+       8. SAVE ENCRYPTED DATASETS
+    ======================================================= */
 
     const datasetRows =
       encryptedDatasets.map(
-        (dataset) => ({
+        (
+          dataset
+        ) => ({
           workbook_id:
             workbookId,
 
           /*
-           * These fields cannot remain plaintext
-           * if we want to avoid dataset metadata leaks.
-           *
-           * Existing DB schema expects sheet_name,
-           * headers, rows and row_count.
-           *
-           * We therefore store neutral values here
-           * and put the real values inside
-           * encrypted_payload.
+           * No plaintext dataset information
+           * is stored here.
            */
           sheet_name:
             'encrypted',
@@ -369,26 +365,20 @@ export const uploadAndParseWorkbook = async (
         })
       )
 
-    /*
-     * NOTE:
-     *
-     * This requires an `encrypted_payload` JSONB
-     * column in public.datasets.
-     */
     const {
-      data: savedDatasets,
-      error: datasetError,
-    } = await supabase
-      .from('datasets')
-      .insert(
-        datasetRows
-      )
-      .select('*')
+      data:
+        savedDatasets,
+      error:
+        datasetError,
+    } =
+      await supabase
+        .from('datasets')
+        .insert(
+          datasetRows
+        )
+        .select('*')
 
     if (datasetError) {
-      /*
-       * Roll back workbook record.
-       */
       await supabase
         .from('workbooks')
         .delete()
@@ -401,9 +391,6 @@ export const uploadAndParseWorkbook = async (
           user.id
         )
 
-      /*
-       * Roll back encrypted Storage object.
-       */
       await supabase.storage
         .from('workbooks')
         .remove([
@@ -415,17 +402,10 @@ export const uploadAndParseWorkbook = async (
       )
     }
 
-    // --------------------------------------------------
-    // 8. Return browser-readable data
-    // --------------------------------------------------
+    /* =======================================================
+       9. RETURN LOCAL DATA
+    ======================================================= */
 
-    /*
-     * The browser already has plaintext parsed data.
-     *
-     * We return it locally so the dashboard can
-     * immediately render without downloading and
-     * decrypting again.
-     */
     const localDatasets =
       parsedDatasets.map(
         (
@@ -460,10 +440,6 @@ export const uploadAndParseWorkbook = async (
 
       workbookId,
 
-      /*
-       * Return original filename only
-       * to the current browser session.
-       */
       name:
         file.name,
 
@@ -491,8 +467,16 @@ export const uploadAndParseWorkbook = async (
 ========================================================= */
 
 export const getUserWorkbooks =
-  async () => {
+  async (
+    encryptionKey
+  ) => {
     try {
+      if (!encryptionKey) {
+        throw new Error(
+          'Encryption key is not available. Please login again.'
+        )
+      }
+
       const user =
         await getCurrentUser()
 
@@ -503,32 +487,135 @@ export const getUserWorkbooks =
       const {
         data,
         error,
-      } = await supabase
-        .from('workbooks')
-        .select('*')
-        .eq(
-          'user_id',
-          user.id
-        )
-        .order(
-          'created_at',
-          {
-            ascending: false,
-          }
-        )
+      } =
+        await supabase
+          .from('workbooks')
+          .select('*')
+          .eq(
+            'user_id',
+            user.id
+          )
+          .order(
+            'created_at',
+            {
+              ascending:
+                false,
+            }
+          )
 
       if (error) {
         throw error
       }
 
-      return data || []
+      /*
+       * IMPORTANT:
+       *
+       * Workbook metadata is decrypted ONLY
+       * inside the browser.
+       *
+       * The encryption key is explicitly passed
+       * from WorkbookContext.
+       *
+       * No window.__datalensEncryptionKey.
+       */
+
+      const decryptedWorkbooks =
+        await Promise.all(
+          (data || []).map(
+            async (
+              workbook
+            ) => {
+              try {
+                if (
+                  !workbook.name
+                ) {
+                  return workbook
+                }
+
+                /*
+                 * New encrypted workbook.
+                 */
+                try {
+                  const encryptedMetadata =
+                    JSON.parse(
+                      workbook.name
+                    )
+
+                  const metadata =
+                    await decryptJSON(
+                      encryptedMetadata,
+                      encryptionKey
+                    )
+
+                  return {
+                    ...workbook,
+
+                    name:
+                      metadata?.name ||
+                      'Encrypted workbook',
+
+                    file_size:
+                      metadata?.originalSize ??
+                      workbook.file_size,
+
+                    original_type:
+                      metadata?.type ||
+                      null,
+                  }
+                } catch (
+                  decryptError
+                ) {
+                  /*
+                   * Old records may contain plaintext
+                   * metadata. We don't silently use them
+                   * as encrypted records.
+                   *
+                   * Keep a neutral display name until
+                   * old records are cleaned.
+                   */
+                  console.warn(
+                    'Could not decrypt workbook metadata:',
+                    workbook.id,
+                    decryptError
+                  )
+
+                  return {
+                    ...workbook,
+
+                    name:
+                      'Encrypted workbook',
+
+                    original_type:
+                      null,
+                  }
+                }
+              } catch (
+                error
+              ) {
+                console.error(
+                  'Failed to process workbook metadata:',
+                  error
+                )
+
+                return {
+                  ...workbook,
+
+                  name:
+                    'Encrypted workbook',
+                }
+              }
+            }
+          )
+        )
+
+      return decryptedWorkbooks
     } catch (error) {
       console.error(
         'Error fetching workbooks:',
         error
       )
 
-      return []
+      throw error
     }
   }
 
@@ -548,18 +635,24 @@ export const getWorkbookDatasets =
       const {
         data,
         error,
-      } = await supabase
-        .from('datasets')
-        .select('*')
-        .eq(
-          'workbook_id',
-          workbookId
-        )
+      } =
+        await supabase
+          .from('datasets')
+          .select('*')
+          .eq(
+            'workbook_id',
+            workbookId
+          )
 
       if (error) {
         throw error
       }
 
+      /*
+       * Dataset payload remains encrypted.
+       *
+       * WorkbookContext decrypts it in browser.
+       */
       return data || []
     } catch (error) {
       console.error(
@@ -567,7 +660,7 @@ export const getWorkbookDatasets =
         error
       )
 
-      return []
+      throw error
     }
   }
 
@@ -595,27 +688,30 @@ export const deleteWorkbook =
         )
       }
 
-      // ----------------------------------------------
-      // 1. Get workbook
-      // ----------------------------------------------
+      /* -----------------------------------------------------
+         1. GET WORKBOOK
+      ----------------------------------------------------- */
 
       const {
-        data: workbook,
-        error: fetchError,
-      } = await supabase
-        .from('workbooks')
-        .select(
-          'id, file_path, user_id'
-        )
-        .eq(
-          'id',
-          workbookId
-        )
-        .eq(
-          'user_id',
-          user.id
-        )
-        .single()
+        data:
+          workbook,
+        error:
+          fetchError,
+      } =
+        await supabase
+          .from('workbooks')
+          .select(
+            'id, file_path, user_id'
+          )
+          .eq(
+            'id',
+            workbookId
+          )
+          .eq(
+            'user_id',
+            user.id
+          )
+          .single()
 
       if (fetchError) {
         throw new Error(
@@ -629,20 +725,21 @@ export const deleteWorkbook =
         )
       }
 
-      // ----------------------------------------------
-      // 2. Delete datasets
-      // ----------------------------------------------
+      /* -----------------------------------------------------
+         2. DELETE DATASETS
+      ----------------------------------------------------- */
 
       const {
         error:
           datasetDeleteError,
-      } = await supabase
-        .from('datasets')
-        .delete()
-        .eq(
-          'workbook_id',
-          workbookId
-        )
+      } =
+        await supabase
+          .from('datasets')
+          .delete()
+          .eq(
+            'workbook_id',
+            workbookId
+          )
 
       if (
         datasetDeleteError
@@ -652,24 +749,25 @@ export const deleteWorkbook =
         )
       }
 
-      // ----------------------------------------------
-      // 3. Delete workbook record
-      // ----------------------------------------------
+      /* -----------------------------------------------------
+         3. DELETE WORKBOOK
+      ----------------------------------------------------- */
 
       const {
         error:
           workbookDeleteError,
-      } = await supabase
-        .from('workbooks')
-        .delete()
-        .eq(
-          'id',
-          workbookId
-        )
-        .eq(
-          'user_id',
-          user.id
-        )
+      } =
+        await supabase
+          .from('workbooks')
+          .delete()
+          .eq(
+            'id',
+            workbookId
+          )
+          .eq(
+            'user_id',
+            user.id
+          )
 
       if (
         workbookDeleteError
@@ -679,9 +777,9 @@ export const deleteWorkbook =
         )
       }
 
-      // ----------------------------------------------
-      // 4. Delete encrypted Storage object
-      // ----------------------------------------------
+      /* -----------------------------------------------------
+         4. DELETE STORAGE FILE
+      ----------------------------------------------------- */
 
       if (
         workbook.file_path
@@ -689,11 +787,12 @@ export const deleteWorkbook =
         const {
           error:
             storageDeleteError,
-        } = await supabase.storage
-          .from('workbooks')
-          .remove([
-            workbook.file_path,
-          ])
+        } =
+          await supabase.storage
+            .from('workbooks')
+            .remove([
+              workbook.file_path,
+            ])
 
         if (
           storageDeleteError
